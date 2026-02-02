@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.bot.keyboards import back_to_menu_keyboard
 from app.config import get_settings
 from app.models import Agent, Client
 
@@ -49,7 +50,7 @@ async def notify_expiring_clients(session: AsyncSession, bot) -> int:
             expires_at=expires_at,
         )
         try:
-            await bot.send_message(agent.telegram_id, text)
+            await bot.send_message(agent.telegram_id, text, reply_markup=back_to_menu_keyboard())
         except Exception as exc:
             logging.warning("Expiry notify failed for agent %s: %s", agent.telegram_id, exc)
             continue

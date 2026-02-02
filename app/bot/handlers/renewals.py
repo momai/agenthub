@@ -10,6 +10,7 @@ from app.bot.keyboards import (
     back_to_menu_keyboard,
     cancel_keyboard,
     clients_keyboard,
+    renew_clients_keyboard,
     skip_keyboard,
     tariffs_keyboard,
 )
@@ -45,6 +46,8 @@ from .clients import _format_client_meta
 
 router = Router()
 
+_RENEW_PAGE_SIZE = 8
+
 
 @router.callback_query(lambda call: call.data == "client:renew")
 async def renew_callback(call: CallbackQuery, state: FSMContext) -> None:
@@ -52,14 +55,32 @@ async def renew_callback(call: CallbackQuery, state: FSMContext) -> None:
         await call.answer(_t(get_settings().text_no_access_alert), show_alert=True)
         return
     await state.set_state(RenewState.waiting_username)
+    await _render_renew_list(call, page=1)
+    await call.answer()
+
+
+@router.callback_query(lambda call: call.data.startswith("renew:list:page:"))
+async def renew_list_page(call: CallbackQuery, state: FSMContext) -> None:
+    if not await _is_agent_allowed(call.from_user.id):
+        await call.answer(_t(get_settings().text_no_access_alert), show_alert=True)
+        return
+    try:
+        page = int(call.data.split(":")[-1])
+    except ValueError:
+        await call.answer(_t(get_settings().text_page_invalid), show_alert=True)
+        return
+    await _render_renew_list(call, page=page)
+    await call.answer()
+
+
+async def _render_renew_list(call: CallbackQuery, page: int) -> None:
     settings = get_settings()
     is_owner = call.from_user.id == settings.owner_telegram_id
     is_admin = call.from_user.id in settings.admin_id_set
-
     async with SessionLocal() as session:
         if is_owner or is_admin:
             client_rows = await list_clients_with_agents(session)
-            buttons = [
+            items = [
                 (
                     client.id,
                     f"{client.username} ({agent.name})",
@@ -68,23 +89,31 @@ async def renew_callback(call: CallbackQuery, state: FSMContext) -> None:
                 for client, agent in client_rows
                 if client.username
             ]
-            if not buttons:
+            if not items:
                 await _edit_or_send(
                     call,
                     _t(settings.text_clients_none),
                     reply_markup=back_to_menu_keyboard(),
                     is_menu=True,
                 )
-                await call.answer()
                 return
+            total_pages = max(1, math.ceil(len(items) / _RENEW_PAGE_SIZE))
+            page = max(1, min(page, total_pages))
+            start = (page - 1) * _RENEW_PAGE_SIZE
+            end = start + _RENEW_PAGE_SIZE
+            page_rows = items[start:end]
+            reply_markup = (
+                clients_keyboard(page_rows, include_cancel=True)
+                if total_pages == 1
+                else renew_clients_keyboard(page_rows, page, total_pages, include_cancel=True)
+            )
             await _edit_or_send(
                 call,
                 _t(settings.text_renew_pick_prompt_owner),
-                reply_markup=clients_keyboard(buttons, include_cancel=True),
+                reply_markup=reply_markup,
                 is_menu=True,
             )
-            logging.info("Renew list for owner/admin: %s", [c[0] for c in buttons])
-            await call.answer()
+            logging.info("Renew list for owner/admin: %s", [c[0] for c in items])
             return
 
         agent = await get_or_create_agent(
@@ -106,7 +135,6 @@ async def renew_callback(call: CallbackQuery, state: FSMContext) -> None:
                     limit=agent.credit_limit,
                 ),
             )
-            await call.answer()
             return
         clients = await list_clients_by_agent(session, agent.id)
         clients = [client for client in clients if client.username]
@@ -117,9 +145,8 @@ async def renew_callback(call: CallbackQuery, state: FSMContext) -> None:
                 reply_markup=back_to_menu_keyboard(),
                 is_menu=True,
             )
-            await call.answer()
             return
-        buttons = [
+        items = [
             (
                 client.id,
                 client.username,
@@ -127,14 +154,23 @@ async def renew_callback(call: CallbackQuery, state: FSMContext) -> None:
             )
             for client in clients
         ]
+        total_pages = max(1, math.ceil(len(items) / _RENEW_PAGE_SIZE))
+        page = max(1, min(page, total_pages))
+        start = (page - 1) * _RENEW_PAGE_SIZE
+        end = start + _RENEW_PAGE_SIZE
+        page_rows = items[start:end]
+        reply_markup = (
+            clients_keyboard(page_rows, include_cancel=True)
+            if total_pages == 1
+            else renew_clients_keyboard(page_rows, page, total_pages, include_cancel=True)
+        )
         await _edit_or_send(
             call,
             _t(settings.text_renew_pick_prompt_agent),
-            reply_markup=clients_keyboard(buttons, include_cancel=True),
+            reply_markup=reply_markup,
             is_menu=True,
         )
         logging.info("Renew list for agent %s: %s", agent.id, [c.username for c in clients])
-        await call.answer()
 
 
 @router.callback_query(lambda call: call.data.startswith("renew:pick:"))

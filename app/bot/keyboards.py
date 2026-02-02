@@ -149,6 +149,56 @@ def agents_limit_keyboard(agent_rows: list[tuple[int, str, str]]) -> InlineKeybo
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def agents_limit_pagination_keyboard(
+    agent_rows: list[tuple[int, str, str]], page: int, total_pages: int
+) -> InlineKeyboardMarkup:
+    settings = get_settings()
+    rows = []
+    for agent_id, name, limit_label in agent_rows:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=_t(settings.text_agent_limit_button, name=name, limit=limit_label),
+                    callback_data=f"owner:limit:pick:{agent_id}",
+                )
+            ]
+        )
+    nav = []
+    if page > 1:
+        nav.append(InlineKeyboardButton(text=_t(settings.btn_prev), callback_data=f"owner:limit:page:{page - 1}"))
+    if page < total_pages:
+        nav.append(InlineKeyboardButton(text=_t(settings.btn_next), callback_data=f"owner:limit:page:{page + 1}"))
+    if nav:
+        rows.append(nav)
+    rows.append([InlineKeyboardButton(text=_t(settings.btn_owner_back), callback_data="owner:agents")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def renew_clients_keyboard(
+    client_rows: list[tuple[int, str | None, str]],
+    page: int,
+    total_pages: int,
+    include_cancel: bool = False,
+) -> InlineKeyboardMarkup:
+    settings = get_settings()
+    rows = []
+    for client_id, username, expires in client_rows:
+        label = username or f"client-{client_id}"
+        label = _t(settings.text_client_button_label, username=label, meta=expires)
+        rows.append([InlineKeyboardButton(text=label, callback_data=f"renew:pick:{client_id}")])
+    nav = []
+    if page > 1:
+        nav.append(InlineKeyboardButton(text=_t(settings.btn_prev), callback_data=f"renew:list:page:{page - 1}"))
+    if page < total_pages:
+        nav.append(InlineKeyboardButton(text=_t(settings.btn_next), callback_data=f"renew:list:page:{page + 1}"))
+    if nav:
+        rows.append(nav)
+    rows.append([InlineKeyboardButton(text=_t(settings.btn_back_to_menu), callback_data="menu")])
+    if include_cancel:
+        rows.append([InlineKeyboardButton(text=_t(settings.btn_cancel), callback_data="cancel")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def transfer_confirm_keyboard(request_id: int) -> InlineKeyboardMarkup:
     settings = get_settings()
     return InlineKeyboardMarkup(

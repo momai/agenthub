@@ -6,7 +6,13 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
-from app.bot.keyboards import agents_limit_keyboard, cancel_keyboard, main_menu, owner_agents_menu
+from app.bot.keyboards import (
+    agents_limit_pagination_keyboard,
+    agents_limit_keyboard,
+    cancel_keyboard,
+    main_menu,
+    owner_agents_menu,
+)
 from app.bot.states import AddAgentState, LimitAgentState
 from app.config import get_settings
 from app.db.session import SessionLocal
@@ -176,23 +182,53 @@ async def owner_limit_menu(call: CallbackQuery) -> None:
     if call.from_user.id != settings.owner_telegram_id:
         await call.answer(_t(settings.text_no_access_alert), show_alert=True)
         return
+    await _render_owner_limit_menu(call, page=1)
+    await call.answer()
+
+
+@router.callback_query(lambda call: call.data.startswith("owner:limit:page:"))
+async def owner_limit_page(call: CallbackQuery) -> None:
+    settings = get_settings()
+    if call.from_user.id != settings.owner_telegram_id:
+        await call.answer(_t(settings.text_no_access_alert), show_alert=True)
+        return
+    try:
+        page = int(call.data.split(":")[-1])
+    except ValueError:
+        await call.answer(_t(settings.text_page_invalid), show_alert=True)
+        return
+    await _render_owner_limit_menu(call, page=page)
+    await call.answer()
+
+
+async def _render_owner_limit_menu(call: CallbackQuery, page: int) -> None:
+    settings = get_settings()
     async with SessionLocal() as session:
         agents_with_counts = await list_agents(session)
     if not agents_with_counts:
         await _edit_or_send(call, _t(settings.text_owner_limit_no_agents), reply_markup=owner_agents_menu(), is_menu=True)
-        await call.answer()
         return
     rows = []
     for agent, _ in agents_with_counts:
         limit_label = "∞" if agent.credit_limit <= 0 else f"{agent.credit_limit} ₽"
         rows.append((agent.id, _agent_display(agent), limit_label))
+    page_size = 8
+    total_pages = max(1, math.ceil(len(rows) / page_size))
+    page = max(1, min(page, total_pages))
+    start = (page - 1) * page_size
+    end = start + page_size
+    page_rows = rows[start:end]
+    reply_markup = (
+        agents_limit_keyboard(page_rows)
+        if total_pages == 1
+        else agents_limit_pagination_keyboard(page_rows, page, total_pages)
+    )
     await _edit_or_send(
         call,
         _t(settings.text_owner_limit_choose_agent),
-        reply_markup=agents_limit_keyboard(rows),
+        reply_markup=reply_markup,
         is_menu=True,
     )
-    await call.answer()
 
 
 @router.callback_query(lambda call: call.data.startswith("owner:limit:pick:"))

@@ -1,0 +1,29 @@
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: agent_bot_db
+    environment:
+      POSTGRES_DB: agent_bot
+      POSTGRES_USER: agent
+      POSTGRES_PASSWORD: agent
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5434:5432"
+
+  bot:
+    build: .
+    container_name: agent_bot
+    depends_on:
+      - db
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://agent:agent@db:5432/agent_bot
+    volumes:
+      - ./app:/app/app
+      - ./main.py:/app/main.py
+    restart: unless-stopped
+
+volumes:
+  postgres_data:

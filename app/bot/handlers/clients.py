@@ -1,0 +1,724 @@
+import logging
+from datetime import datetime
+
+from aiogram import Router
+from aiogram.fsm.context import FSMContext
+from aiogram.types import CallbackQuery, Message
+
+from app.bot.keyboards import (
+    back_to_menu_keyboard,
+    cancel_keyboard,
+    clients_list_pagination_keyboard,
+    clients_keyboard,
+    skip_keyboard,
+    tariff_actions_keyboard,
+    tariffs_keyboard,
+)
+from app.bot.states import NewClientState, RenewState
+from app.config import get_settings
+from app.db.session import SessionLocal
+from app.services.agent_service import get_agent_by_id, get_or_create_agent
+from app.services.client_service import (
+    add_days,
+    create_client,
+    get_client_by_id,
+    get_client_by_username,
+    get_client_by_username_any,
+    list_clients_by_agent,
+    list_clients_with_agents,
+)
+from app.services.debt_service import increase_debt
+from app.services.remnawave_service import create_or_extend_user
+
+from .common import (
+    _agent_display,
+    USERNAME_PATTERN,
+    _calc_base_debt,
+    _credit_limit_exceeded,
+    _format_traffic,
+    _is_agent_allowed,
+    _is_cancel,
+    _is_skip,
+    _is_start,
+    _t,
+    _tariffs_for_user,
+)
+from .menu import _edit_or_send, _render_error_prompt, _render_menu_text, _show_start_menu, _show_status_then_menu
+
+
+router = Router()
+
+
+@router.callback_query(lambda call: call.data == "client:new")
+async def new_client_callback(call: CallbackQuery, state: FSMContext) -> None:
+    if not await _is_agent_allowed(call.from_user.id):
+        await call.answer(_t(get_settings().text_no_access_alert), show_alert=True)
+        return
+    settings = get_settings()
+    if not settings.tariffs():
+        async with SessionLocal() as session:
+            agent = await get_or_create_agent(
+                session,
+                call.from_user.id,
+                call.from_user.full_name,
+                call.from_user.username,
+            )
+            if _credit_limit_exceeded(agent, settings.base_subscription_price):
+                await _show_status_then_menu(
+                    bot=call.bot,
+                    chat_id=call.message.chat.id,
+                    user_id=call.from_user.id,
+                    name=call.from_user.full_name,
+                    is_owner=call.from_user.id == settings.owner_telegram_id,
+                    status_text=_t(
+                        settings.text_limit_reached_create,
+                        current=agent.current_debt,
+                        limit=agent.credit_limit,
+                    ),
+                )
+                await call.answer()
+                return
+    await state.set_state(NewClientState.waiting_username)
+    await _edit_or_send(
+        call,
+        _t(settings.text_new_client_username_prompt),
+        reply_markup=cancel_keyboard(),
+        is_menu=True,
+    )
+    await call.answer()
+
+
+@router.callback_query(lambda call: call.data == "tariff:back")
+async def tariff_back(call: CallbackQuery, state: FSMContext) -> None:
+    settings = get_settings()
+    data = await state.get_data()
+    current_state = await state.get_state()
+    target_agent_id = data.get("agent_id")
+    target_telegram_id = call.from_user.id
+    is_owner = call.from_user.id == settings.owner_telegram_id
+    is_admin = call.from_user.id in settings.admin_id_set
+    if target_agent_id:
+        async with SessionLocal() as session:
+            agent = await get_agent_by_id(session, target_agent_id)
+            if agent:
+                target_telegram_id = agent.telegram_id
+    tariffs = _tariffs_for_user(
+        settings,
+        target_telegram_id,
+        show_all=not target_agent_id and (is_owner or is_admin),
+    )
+    if not tariffs:
+        await _edit_or_send(
+            call,
+            _t(settings.text_tariffs_empty),
+            reply_markup=cancel_keyboard(),
+            is_menu=True,
+        )
+        await call.answer()
+        return
+    if current_state == NewClientState.waiting_price.state:
+        await state.set_state(NewClientState.waiting_tariff)
+    elif current_state == RenewState.waiting_amount.state:
+        await state.set_state(RenewState.waiting_tariff)
+    await _edit_or_send(
+        call,
+        _t(settings.text_tariff_pick_prompt),
+        reply_markup=tariffs_keyboard(tariffs),
+        is_menu=True,
+    )
+    await call.answer()
+
+
+@router.message(NewClientState.waiting_username)
+async def new_client_username(message: Message, state: FSMContext) -> None:
+    if not await _is_agent_allowed(message.from_user.id):
+        await message.answer(_t(get_settings().text_no_access_message))
+        await state.clear()
+        return
+    if _is_start(message.text):
+        await state.clear()
+        await _show_start_menu(message)
+        return
+    if _is_cancel(message.text):
+        await state.clear()
+        await _show_start_menu(message)
+        return
+    username = (message.text or "").strip()
+    if not USERNAME_PATTERN.match(username):
+        settings = get_settings()
+        await _render_error_prompt(
+            bot=message.bot,
+            chat_id=message.chat.id,
+            user_id=message.from_user.id,
+            name=message.from_user.full_name,
+            error_text=_t(settings.text_username_invalid),
+            prompt_text=_t(settings.text_new_client_username_prompt),
+        )
+        return
+
+    await state.update_data(username=username)
+    await state.set_state(NewClientState.waiting_tg_id)
+    await _render_menu_text(
+        bot=message.bot,
+        chat_id=message.chat.id,
+        user_id=message.from_user.id,
+        name=message.from_user.full_name,
+        text=_t(get_settings().text_new_client_tg_id_prompt),
+        reply_markup=skip_keyboard("tg"),
+        force_new=True,
+    )
+
+
+@router.message(NewClientState.waiting_tg_id)
+async def new_client_tg_id(message: Message, state: FSMContext) -> None:
+    if not await _is_agent_allowed(message.from_user.id):
+        await message.answer(_t(get_settings().text_no_access_message))
+        await state.clear()
+        return
+    if _is_start(message.text):
+        await state.clear()
+        await _show_start_menu(message)
+        return
+    if _is_cancel(message.text):
+        await state.clear()
+        await _show_start_menu(message)
+        return
+
+    telegram_id: int | None = None
+    if _is_skip(message.text):
+        telegram_id = None
+    else:
+        try:
+            telegram_id = int((message.text or "").strip())
+        except (ValueError, AttributeError):
+            await _render_error_prompt(
+                bot=message.bot,
+                chat_id=message.chat.id,
+                user_id=message.from_user.id,
+                name=message.from_user.full_name,
+                error_text=_t(get_settings().text_tg_id_invalid),
+                prompt_text=_t(get_settings().text_new_client_tg_id_prompt),
+                reply_markup=skip_keyboard("tg"),
+            )
+            return
+
+    await state.update_data(telegram_id=telegram_id)
+    settings = get_settings()
+    is_owner = message.from_user.id == settings.owner_telegram_id
+    is_admin = message.from_user.id in settings.admin_id_set
+    tariffs = _tariffs_for_user(settings, message.from_user.id, show_all=is_owner or is_admin)
+    if not tariffs:
+        await _render_menu_text(
+            bot=message.bot,
+            chat_id=message.chat.id,
+            user_id=message.from_user.id,
+            name=message.from_user.full_name,
+            text=f"{_t(settings.text_tariffs_empty)}\n\n{_t(settings.text_new_client_price_prompt)}",
+            reply_markup=cancel_keyboard(),
+            force_new=True,
+        )
+        await state.update_data(tariff_base_price=settings.base_subscription_price, tariff_remnawave={})
+        await state.set_state(NewClientState.waiting_price)
+        return
+    await state.set_state(NewClientState.waiting_tariff)
+    await _render_menu_text(
+        bot=message.bot,
+        chat_id=message.chat.id,
+        user_id=message.from_user.id,
+        name=message.from_user.full_name,
+        text=_t(settings.text_tariff_pick_prompt),
+        reply_markup=tariffs_keyboard(tariffs),
+        force_new=True,
+    )
+
+
+@router.callback_query(lambda call: call.data == "skip:tg")
+async def new_client_skip_tg(call: CallbackQuery, state: FSMContext) -> None:
+    if not await _is_agent_allowed(call.from_user.id):
+        await call.answer(_t(get_settings().text_no_access_alert), show_alert=True)
+        return
+    data = await state.get_data()
+    username = data.get("username")
+    if not username:
+        await call.answer(_t(get_settings().text_enter_username_first), show_alert=True)
+        return
+    await state.update_data(telegram_id=None)
+    settings = get_settings()
+    is_owner = call.from_user.id == settings.owner_telegram_id
+    is_admin = call.from_user.id in settings.admin_id_set
+    tariffs = _tariffs_for_user(settings, call.from_user.id, show_all=is_owner or is_admin)
+    if not tariffs:
+        await _edit_or_send(
+            call,
+            f"{_t(settings.text_tariffs_empty)}\n\n{_t(settings.text_new_client_price_prompt)}",
+            reply_markup=cancel_keyboard(),
+            is_menu=True,
+        )
+        await state.update_data(tariff_base_price=settings.base_subscription_price, tariff_remnawave={})
+        await state.set_state(NewClientState.waiting_price)
+        await call.answer()
+        return
+    await state.set_state(NewClientState.waiting_tariff)
+    await _edit_or_send(
+        call,
+        _t(settings.text_tariff_pick_prompt),
+        reply_markup=tariffs_keyboard(tariffs),
+        is_menu=True,
+    )
+    await call.answer()
+
+
+@router.callback_query(lambda call: call.data.startswith("tariff:pick:"))
+async def tariff_pick(call: CallbackQuery, state: FSMContext) -> None:
+    if not await _is_agent_allowed(call.from_user.id):
+        await call.answer(_t(get_settings().text_no_access_alert), show_alert=True)
+        return
+    settings = get_settings()
+    try:
+        tariff_id = int(call.data.split(":")[-1])
+    except ValueError:
+        await call.answer(_t(settings.text_no_access_alert), show_alert=True)
+        return
+    data = await state.get_data()
+    current_state = await state.get_state()
+    target_agent_id = data.get("agent_id")
+    target_telegram_id = call.from_user.id
+    is_owner = call.from_user.id == settings.owner_telegram_id
+    is_admin = call.from_user.id in settings.admin_id_set
+    if target_agent_id:
+        async with SessionLocal() as session:
+            agent = await get_agent_by_id(session, target_agent_id)
+            if agent:
+                target_telegram_id = agent.telegram_id
+    visible_tariffs = _tariffs_for_user(
+        settings,
+        target_telegram_id,
+        show_all=not target_agent_id and (is_owner or is_admin),
+    )
+    tariff = next((t for t in visible_tariffs if t.get("id") == tariff_id), None)
+    if not tariff:
+        await call.answer(_t(settings.text_no_access_alert), show_alert=True)
+        return
+    base_price = tariff.get("base_price") or settings.base_subscription_price
+    await state.update_data(tariff_id=tariff_id, tariff_base_price=base_price, tariff_name=tariff.get("name"))
+    await state.update_data(tariff_remnawave=tariff.get("remnawave") or {})
+    traffic = _format_traffic((tariff.get("remnawave") or {}).get("traffic_limit_gb"))
+    desc = (tariff.get("desc") or "").strip()
+    desc_line = f"Описание: {desc}" if desc else ""
+
+    if current_state == NewClientState.waiting_tariff.state:
+        async with SessionLocal() as session:
+            agent = await get_or_create_agent(
+                session,
+                call.from_user.id,
+                call.from_user.full_name,
+                call.from_user.username,
+            )
+            if _credit_limit_exceeded(agent, base_price):
+                await _show_status_then_menu(
+                    bot=call.bot,
+                    chat_id=call.message.chat.id,
+                    user_id=call.from_user.id,
+                    name=call.from_user.full_name,
+                    is_owner=call.from_user.id == settings.owner_telegram_id,
+                    status_text=_t(
+                        settings.text_limit_reached_create,
+                        current=agent.current_debt,
+                        limit=agent.credit_limit,
+                    ),
+                )
+                await state.clear()
+                await call.answer()
+                return
+        await state.set_state(NewClientState.waiting_price)
+        await _edit_or_send(
+            call,
+            _t(
+                settings.text_tariff_selected,
+                name=tariff.get("name"),
+                price=base_price,
+                traffic=traffic,
+                desc=desc_line,
+                prompt=_t(settings.text_new_client_price_prompt),
+            ),
+            reply_markup=tariff_actions_keyboard(),
+            is_menu=True,
+        )
+        await call.answer()
+        return
+
+    if current_state == RenewState.waiting_tariff.state:
+        days = data.get("days") or settings.default_renew_days
+        async with SessionLocal() as session:
+            if target_agent_id:
+                target_agent = await get_agent_by_id(session, target_agent_id)
+            else:
+                target_agent = await get_or_create_agent(
+                    session,
+                    call.from_user.id,
+                    call.from_user.full_name,
+                    call.from_user.username,
+                )
+            if not target_agent:
+                await call.answer(_t(settings.text_target_agent_not_found), show_alert=True)
+                await state.clear()
+                return
+            owner_share = _calc_base_debt(settings, days, base_price)
+            projected = target_agent.current_debt + owner_share
+            if target_agent.credit_limit > 0 and projected > target_agent.credit_limit:
+                await _show_status_then_menu(
+                    bot=call.bot,
+                    chat_id=call.message.chat.id,
+                    user_id=call.from_user.id,
+                    name=call.from_user.full_name,
+                    is_owner=call.from_user.id == settings.owner_telegram_id,
+                    status_text=_t(
+                        settings.text_limit_reached_renew,
+                        current=target_agent.current_debt,
+                        limit=target_agent.credit_limit,
+                    ),
+                )
+                await state.clear()
+                await call.answer()
+                return
+        await state.set_state(RenewState.waiting_amount)
+        await _edit_or_send(
+            call,
+            _t(
+                settings.text_tariff_selected,
+                name=tariff.get("name"),
+                price=base_price,
+                traffic=traffic,
+                desc=desc_line,
+                prompt=_t(settings.text_renew_amount_prompt),
+            ),
+            reply_markup=tariff_actions_keyboard(),
+            is_menu=True,
+        )
+        await call.answer()
+        return
+
+    await call.answer()
+
+
+@router.message(NewClientState.waiting_price)
+async def new_client_price(message: Message, state: FSMContext) -> None:
+    if not await _is_agent_allowed(message.from_user.id):
+        await message.answer(_t(get_settings().text_no_access_message))
+        await state.clear()
+        return
+    if _is_start(message.text):
+        await state.clear()
+        await _show_start_menu(message)
+        return
+    if _is_cancel(message.text):
+        await state.clear()
+        await _show_start_menu(message)
+        return
+    try:
+        price = int((message.text or "").strip())
+    except ValueError:
+        await _render_error_prompt(
+            bot=message.bot,
+            chat_id=message.chat.id,
+            user_id=message.from_user.id,
+            name=message.from_user.full_name,
+            error_text=_t(get_settings().text_amount_invalid_example),
+            prompt_text=_t(get_settings().text_new_client_price_prompt),
+            reply_markup=cancel_keyboard(),
+        )
+        return
+    if price <= 0:
+        await _render_error_prompt(
+            bot=message.bot,
+            chat_id=message.chat.id,
+            user_id=message.from_user.id,
+            name=message.from_user.full_name,
+            error_text=_t(get_settings().text_amount_positive),
+            prompt_text=_t(get_settings().text_new_client_price_prompt),
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    data = await state.get_data()
+    username = data.get("username")
+    telegram_id = data.get("telegram_id")
+    settings = get_settings()
+    base_price = data.get("tariff_base_price") or settings.base_subscription_price
+    tariff_name = data.get("tariff_name")
+    tariff_remnawave = data.get("tariff_remnawave") or {}
+
+    await _create_client_in_remnawave(
+        actor_id=message.from_user.id,
+        actor_name=message.from_user.full_name,
+        message=message,
+        username=username,
+        telegram_id=telegram_id,
+        monthly_price=price,
+        base_price=base_price,
+        tariff_name=tariff_name,
+        tariff_remnawave=tariff_remnawave,
+    )
+    await state.clear()
+
+
+@router.callback_query(lambda call: call.data == "client:list")
+async def clients_list(call: CallbackQuery, state: FSMContext) -> None:
+    if not await _is_agent_allowed(call.from_user.id):
+        await call.answer(_t(get_settings().text_no_access_alert), show_alert=True)
+        return
+    await state.clear()
+    await _render_clients_list(call, page=1)
+    await call.answer()
+
+
+@router.callback_query(lambda call: call.data.startswith("client:list:page:"))
+async def clients_list_page(call: CallbackQuery) -> None:
+    if not await _is_agent_allowed(call.from_user.id):
+        await call.answer(_t(get_settings().text_no_access_alert), show_alert=True)
+        return
+    try:
+        page = int(call.data.split(":")[-1])
+    except ValueError:
+        await call.answer(_t(get_settings().text_page_invalid), show_alert=True)
+        return
+    await _render_clients_list(call, page=page, edit=True)
+    await call.answer()
+
+
+async def _create_client_in_remnawave(
+    actor_id: int,
+    actor_name: str,
+    message: Message,
+    username: str,
+    telegram_id: int | None,
+    monthly_price: int,
+    base_price: int | None = None,
+    tariff_name: str | None = None,
+    tariff_remnawave: dict | None = None,
+) -> None:
+    async with SessionLocal() as session:
+        agent = await get_or_create_agent(session, actor_id, actor_name, message.from_user.username)
+        if not agent.is_active:
+            await _show_status_then_menu(
+                bot=message.bot,
+                chat_id=message.chat.id,
+                user_id=actor_id,
+                name=actor_name,
+                is_owner=actor_id == get_settings().owner_telegram_id,
+                status_text=_t(get_settings().text_agent_blocked),
+            )
+            return
+        settings = get_settings()
+        base_price = base_price or settings.base_subscription_price
+        tariff_name = tariff_name or _t(settings.text_client_tariff_default)
+        projected = agent.current_debt + base_price
+        if agent.credit_limit > 0 and projected > agent.credit_limit:
+            await _show_status_then_menu(
+                bot=message.bot,
+                chat_id=message.chat.id,
+                user_id=actor_id,
+                name=actor_name,
+                is_owner=actor_id == settings.owner_telegram_id,
+                status_text=_t(
+                    settings.text_limit_reached_create,
+                    current=agent.current_debt,
+                    limit=agent.credit_limit,
+                ),
+            )
+            return
+        logging.info(
+            "Create client: actor_id=%s agent_id=%s username=%s telegram_id=%s price=%s",
+            actor_id,
+            agent.id,
+            username,
+            telegram_id,
+            monthly_price,
+        )
+        existing = await get_client_by_username(session, agent.id, username)
+        if existing:
+            await _show_status_then_menu(
+                bot=message.bot,
+                chat_id=message.chat.id,
+                user_id=actor_id,
+                name=actor_name,
+                is_owner=actor_id == settings.owner_telegram_id,
+                status_text=_t(settings.text_client_exists),
+            )
+            logging.info("Client already exists in DB: agent_id=%s username=%s id=%s", agent.id, username, existing.id)
+            return
+
+        try:
+            result = await create_or_extend_user(
+                username=username,
+                days=settings.default_renew_days,
+                description=f"agent:{agent.telegram_id}",
+                telegram_id=telegram_id,
+                overrides=(tariff_remnawave or {}),
+            )
+        except Exception as exc:
+            logging.exception("Create Remnawave error")
+            await _show_status_then_menu(
+                bot=message.bot,
+                chat_id=message.chat.id,
+                user_id=actor_id,
+                name=actor_name,
+                is_owner=actor_id == settings.owner_telegram_id,
+                status_text=_t(settings.text_create_error, error=exc),
+            )
+            return
+
+        expires_at = result.get("expires_at")
+        subscription_link = result.get("subscription_url")
+        await create_client(
+            session,
+            agent_id=agent.id,
+            username=username,
+            telegram_id=telegram_id,
+            expires_at=expires_at,
+            subscription_link=subscription_link,
+            monthly_price=monthly_price,
+            last_payment_amount=monthly_price,
+            last_payment_at=datetime.utcnow(),
+            tariff_name=tariff_name,
+            tariff_base_price=base_price,
+        )
+        logging.info(
+            "Client created in DB after Remnawave: agent_id=%s username=%s",
+            agent.id,
+            username,
+        )
+        await increase_debt(session, agent, base_price, f"Создание клиента {username}")
+        profit = monthly_price - base_price
+        await _show_status_then_menu(
+            bot=message.bot,
+            chat_id=message.chat.id,
+            user_id=actor_id,
+            name=actor_name,
+            is_owner=actor_id == settings.owner_telegram_id,
+            status_text=_t(
+                settings.text_create_success,
+                username=username,
+                days=settings.default_renew_days,
+                profit=profit,
+                amount=monthly_price,
+                base_price=base_price,
+                payable=agent.current_debt,
+            ),
+            extra_text=(
+                _t(settings.text_subscription_link, link=subscription_link) if subscription_link else None
+            ),
+        )
+
+
+def _format_date(value: datetime | None) -> str:
+    settings = get_settings()
+    if not value:
+        return _t(settings.text_date_none)
+    today = datetime.utcnow().date()
+    days_left = (value.date() - today).days
+    if days_left < 0:
+        return _t(settings.text_date_expired)
+    return _t(settings.text_days_left, days=days_left)
+
+
+def _format_client_meta(value: datetime | None, last_payment: int | None) -> str:
+    date_part = _format_date(value)
+    if last_payment is None:
+        return date_part
+    return _t(get_settings().text_client_meta, date=date_part, payment=last_payment)
+
+
+def _format_client_line(client, agent_name: str | None) -> str:
+    settings = get_settings()
+    date_part = _format_date(client.expires_at)
+    tariff_price = client.tariff_base_price or settings.base_subscription_price
+    tariff_name = client.tariff_name or _t(settings.text_client_tariff_default)
+    tariff_part = (
+        _t(
+            settings.text_client_tariff,
+            name=tariff_name,
+            price=tariff_price,
+        )
+        if tariff_price
+        else _t(settings.text_client_tariff_none)
+    )
+    price_part = (
+        _t(settings.text_client_price, price=client.monthly_price)
+        if client.monthly_price
+        else _t(settings.text_client_price_none)
+    )
+    paid_part = (
+        _t(settings.text_client_paid, amount=client.last_payment_amount)
+        if client.last_payment_amount is not None
+        else _t(settings.text_client_paid_none)
+    )
+    agent_part = f" • {agent_name}" if agent_name else ""
+    return _t(
+        settings.text_client_line,
+        username=client.username,
+        agent_part=agent_part,
+        date=date_part,
+        tariff=tariff_part,
+        price=price_part,
+        paid=paid_part,
+    )
+
+
+async def _render_clients_list(call: CallbackQuery, page: int, edit: bool = False) -> None:
+    settings = get_settings()
+    is_owner = call.from_user.id == settings.owner_telegram_id
+    is_admin = call.from_user.id in settings.admin_id_set
+
+    async with SessionLocal() as session:
+        if is_owner or is_admin:
+            client_rows = await list_clients_with_agents(session)
+            lines = [
+                _format_client_line(client, _agent_display(agent))
+                for client, agent in client_rows
+                if client.username
+            ]
+        else:
+            agent = await get_or_create_agent(
+                session,
+                call.from_user.id,
+                call.from_user.full_name,
+                call.from_user.username,
+            )
+            clients = await list_clients_by_agent(session, agent.id)
+            lines = [
+                _format_client_line(client, None)
+                for client in clients
+                if client.username
+            ]
+
+    if not lines:
+        await _edit_or_send(call, _t(settings.text_clients_list_empty), reply_markup=back_to_menu_keyboard(), is_menu=True)
+        return
+
+    page_size = 20
+    total_pages = max(1, (len(lines) + page_size - 1) // page_size)
+    page = max(1, min(page, total_pages))
+    start_idx = (page - 1) * page_size
+    end_idx = start_idx + page_size
+    header = (
+        _t(settings.text_clients_list_header_owner)
+        if is_owner or is_admin
+        else _t(settings.text_clients_list_header_agent)
+    )
+    status_text = "\n".join([f"{header} · {page}/{total_pages}", *lines[start_idx:end_idx]])
+
+    if edit:
+        await _edit_or_send(
+            call,
+            status_text,
+            reply_markup=clients_list_pagination_keyboard(page, total_pages),
+            is_menu=True,
+        )
+        return
+    await _edit_or_send(
+        call,
+        status_text,
+        reply_markup=clients_list_pagination_keyboard(page, total_pages),
+        is_menu=True,
+    )

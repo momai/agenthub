@@ -6,7 +6,13 @@ from aiogram import Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
-from app.bot.keyboards import cancel_keyboard, clients_keyboard, skip_keyboard, tariffs_keyboard
+from app.bot.keyboards import (
+    back_to_menu_keyboard,
+    cancel_keyboard,
+    clients_keyboard,
+    skip_keyboard,
+    tariffs_keyboard,
+)
 from app.bot.states import RenewState
 from app.config import get_settings
 from app.db.session import SessionLocal
@@ -63,7 +69,12 @@ async def renew_callback(call: CallbackQuery, state: FSMContext) -> None:
                 if client.username
             ]
             if not buttons:
-                await _edit_or_send(call, _t(settings.text_clients_none), is_menu=True)
+                await _edit_or_send(
+                    call,
+                    _t(settings.text_clients_none),
+                    reply_markup=back_to_menu_keyboard(),
+                    is_menu=True,
+                )
                 await call.answer()
                 return
             await _edit_or_send(
@@ -100,7 +111,12 @@ async def renew_callback(call: CallbackQuery, state: FSMContext) -> None:
         clients = await list_clients_by_agent(session, agent.id)
         clients = [client for client in clients if client.username]
         if not clients:
-            await _edit_or_send(call, _t(settings.text_clients_none), is_menu=True)
+            await _edit_or_send(
+                call,
+                _t(settings.text_clients_none),
+                reply_markup=back_to_menu_keyboard(),
+                is_menu=True,
+            )
             await call.answer()
             return
         buttons = [

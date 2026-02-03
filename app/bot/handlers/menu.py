@@ -327,14 +327,12 @@ async def tariffs_info(call: CallbackQuery) -> None:
     else:
         tariffs = settings.visible_tariffs(call.from_user.id)
     tariffs_block = _format_tariffs_block(settings, tariffs)
-    text = "\n".join(
-        [
-            _t(settings.text_tariffs_screen_title),
-            _t(settings.text_tariffs_screen_subtitle),
-            "",
-            tariffs_block,
-        ]
-    )
+    parts = [
+        _t(settings.text_tariffs_screen_title),
+        _t(settings.text_tariffs_screen_subtitle),
+        tariffs_block,
+    ]
+    text = "\n\n".join([part for part in parts if part.strip()])
     await _edit_or_send(
         call,
         text,

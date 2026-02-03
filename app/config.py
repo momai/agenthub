@@ -238,10 +238,10 @@ class Settings(BaseSettings):
     text_tariff_pick_prompt: str = "📦 <b>Выбери тариф</b>\\n\\n<i>От тарифа зависит цена для владельца</i>"
     text_tariff_selected: str = "✅ <b>Тариф:</b> {name}\\n\\n💰 Цена владельцу: <b>{price} ₽</b>\\n📶 Трафик: <b>{traffic}</b>\\n{desc}\\n\\n{prompt}"
     text_tariffs_empty: str = "Тарифы пока не настроены."
-    text_tariffs_header: str = "📦 <b>Доступные тарифы</b>\\n"
+    text_tariffs_header: str = "📦 <b>Доступные тарифы</b>\\n<i>Условия и цены для клиентов:</i>\\n"
     text_tariffs_line: str = "\\n◆ <b>{name}</b> — <b>{price} ₽</b>\\n   📶 {traffic}{desc}"
-    text_tariffs_screen_title: str = "📦 <b>Тарифы</b>"
-    text_tariffs_screen_subtitle: str = "<i>Условия и цены для клиентов:</i>\\n"
+    text_tariffs_screen_title: str = ""
+    text_tariffs_screen_subtitle: str = ""
 
     # ─── Управление агентами (владелец) ───────────────────────────
     text_owner_agents_title: str = "⚙️ <b>Управление агентами</b>"

@@ -11,6 +11,8 @@ from app.bot.keyboards import (
     agents_limit_keyboard,
     cancel_keyboard,
     delete_confirm_keyboard,
+    delete_clients_keyboard,
+    delete_clients_pagination_keyboard,
     delete_agents_keyboard,
     delete_agents_pagination_keyboard,
     main_menu,
@@ -29,15 +31,23 @@ from app.services.agent_service import (
     delete_agent_by_id,
 )
 from app.services.client_service import (
+    get_client_by_id,
     get_client_by_tg_any,
     get_client_by_username_any,
     delete_client_by_id,
+    list_clients_with_agents,
 )
 from app.services.notify_service import list_expiring_clients, notify_expiring_clients
 from app.services.sync_service import sync_all_clients_with_remnawave
 
 from .common import _agent_display, _is_cancel, _is_start, _t
-from .menu import _edit_or_send, _render_error_prompt, _show_start_menu, _show_status_then_menu
+from .menu import (
+    _edit_or_send,
+    _render_error_prompt,
+    _render_menu_text,
+    _show_start_menu,
+    _show_status_then_menu,
+)
 
 
 router = Router()
@@ -491,13 +501,51 @@ async def owner_delete_client(call: CallbackQuery, state: FSMContext) -> None:
         await call.answer(_t(settings.text_no_access_alert), show_alert=True)
         return
     await state.set_state(DeleteClientState.waiting_username)
+    await _render_owner_delete_client_menu(call, page=1)
+    await call.answer()
+
+
+@router.callback_query(lambda call: call.data.startswith("owner:delete:client:page:"))
+async def owner_delete_client_page(call: CallbackQuery, state: FSMContext) -> None:
+    settings = get_settings()
+    if not _is_owner_or_admin(call.from_user.id):
+        await call.answer(_t(settings.text_no_access_alert), show_alert=True)
+        return
+    await state.set_state(DeleteClientState.waiting_username)
+    try:
+        page = int(call.data.split(":")[-1])
+    except ValueError:
+        await call.answer(_t(settings.text_page_invalid), show_alert=True)
+        return
+    await _render_owner_delete_client_menu(call, page=page)
+    await call.answer()
+
+
+async def _render_owner_delete_client_menu(call: CallbackQuery, page: int) -> None:
+    settings = get_settings()
+    async with SessionLocal() as session:
+        pairs = await list_clients_with_agents(session)
+    if not pairs:
+        await _edit_or_send(call, _t(settings.text_clients_none), reply_markup=owner_agents_menu(), is_menu=True)
+        return
+    rows = [(client.id, f"{client.username} · {_agent_display(agent)}") for client, agent in pairs]
+    page_size = 8
+    total_pages = max(1, math.ceil(len(rows) / page_size))
+    page = max(1, min(page, total_pages))
+    start = (page - 1) * page_size
+    end = start + page_size
+    page_rows = rows[start:end]
+    reply_markup = (
+        delete_clients_keyboard(page_rows)
+        if total_pages == 1
+        else delete_clients_pagination_keyboard(page_rows, page, total_pages)
+    )
     await _edit_or_send(
         call,
         _t(settings.text_owner_delete_client_prompt),
-        reply_markup=cancel_keyboard(),
+        reply_markup=reply_markup,
         is_menu=True,
     )
-    await call.answer()
 
 
 @router.message(DeleteClientState.waiting_username)
@@ -543,6 +591,32 @@ async def owner_delete_client_message(message: Message, state: FSMContext) -> No
         text=_t(settings.text_owner_delete_client_confirm, username=client.username),
         reply_markup=delete_confirm_keyboard(f"owner:delete:client:confirm:{client.id}"),
         force_new=True,
+    )
+
+
+@router.callback_query(lambda call: call.data.startswith("owner:delete:client:pick:"))
+async def owner_delete_client_pick(call: CallbackQuery, state: FSMContext) -> None:
+    settings = get_settings()
+    if not _is_owner_or_admin(call.from_user.id):
+        await call.answer(_t(settings.text_no_access_alert), show_alert=True)
+        return
+    try:
+        client_id = int(call.data.split(":")[-1])
+    except ValueError:
+        await call.answer(_t(settings.text_page_invalid), show_alert=True)
+        return
+    async with SessionLocal() as session:
+        client = await get_client_by_id(session, client_id)
+    if not client:
+        await call.answer(_t(settings.text_owner_delete_not_found), show_alert=True)
+        return
+    await state.update_data(delete_client_id=client.id, delete_client_username=client.username)
+    await state.set_state(DeleteClientState.confirm)
+    await _edit_or_send(
+        call,
+        _t(settings.text_owner_delete_client_confirm, username=client.username),
+        reply_markup=delete_confirm_keyboard(f"owner:delete:client:confirm:{client.id}"),
+        is_menu=True,
     )
 
 

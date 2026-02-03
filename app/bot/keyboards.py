@@ -220,6 +220,34 @@ def delete_agents_keyboard(agent_rows: list[tuple[int, str]]) -> InlineKeyboardM
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def delete_clients_keyboard(client_rows: list[tuple[int, str]]) -> InlineKeyboardMarkup:
+    rows = []
+    for client_id, label in client_rows:
+        rows.append([InlineKeyboardButton(text=label, callback_data=f"owner:delete:client:pick:{client_id}")])
+    rows.append([InlineKeyboardButton(text=_t(get_settings().btn_owner_back), callback_data="owner:agents")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def delete_clients_pagination_keyboard(
+    client_rows: list[tuple[int, str]],
+    page: int,
+    total_pages: int,
+) -> InlineKeyboardMarkup:
+    settings = get_settings()
+    rows = []
+    for client_id, label in client_rows:
+        rows.append([InlineKeyboardButton(text=label, callback_data=f"owner:delete:client:pick:{client_id}")])
+    nav = []
+    if page > 1:
+        nav.append(InlineKeyboardButton(text=_t(settings.btn_prev), callback_data=f"owner:delete:client:page:{page - 1}"))
+    if page < total_pages:
+        nav.append(InlineKeyboardButton(text=_t(settings.btn_next), callback_data=f"owner:delete:client:page:{page + 1}"))
+    if nav:
+        rows.append(nav)
+    rows.append([InlineKeyboardButton(text=_t(settings.btn_owner_back), callback_data="owner:agents")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def delete_agents_pagination_keyboard(
     agent_rows: list[tuple[int, str]],
     page: int,

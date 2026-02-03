@@ -28,7 +28,7 @@ from app.services.client_service import (
     list_clients_with_agents,
 )
 from app.services.debt_service import increase_debt
-from app.services.remnawave_service import create_or_extend_user
+from app.services.remnawave_service import create_user_only, username_exists
 
 from .common import (
     _agent_display,
@@ -123,7 +123,7 @@ async def tariff_back(call: CallbackQuery, state: FSMContext) -> None:
     await _edit_or_send(
         call,
         _t(settings.text_tariff_pick_prompt),
-        reply_markup=tariffs_keyboard(tariffs),
+        reply_markup=tariffs_keyboard(tariffs, label_mode="price"),
         is_menu=True,
     )
     await call.answer()
@@ -152,6 +152,29 @@ async def new_client_username(message: Message, state: FSMContext) -> None:
             user_id=message.from_user.id,
             name=message.from_user.full_name,
             error_text=_t(settings.text_username_invalid),
+            prompt_text=_t(settings.text_new_client_username_prompt),
+        )
+        return
+    settings = get_settings()
+    try:
+        if await username_exists(username):
+            await _render_error_prompt(
+                bot=message.bot,
+                chat_id=message.chat.id,
+                user_id=message.from_user.id,
+                name=message.from_user.full_name,
+                error_text=_t(settings.text_username_taken_panel, username=username),
+                prompt_text=_t(settings.text_new_client_username_prompt),
+                reply_markup=cancel_keyboard(),
+            )
+            return
+    except Exception as exc:
+        await _render_error_prompt(
+            bot=message.bot,
+            chat_id=message.chat.id,
+            user_id=message.from_user.id,
+            name=message.from_user.full_name,
+            error_text=_t(settings.text_create_error, error=exc),
             prompt_text=_t(settings.text_new_client_username_prompt),
         )
         return
@@ -227,7 +250,7 @@ async def new_client_tg_id(message: Message, state: FSMContext) -> None:
         user_id=message.from_user.id,
         name=message.from_user.full_name,
         text=_t(settings.text_tariff_pick_prompt),
-        reply_markup=tariffs_keyboard(tariffs),
+        reply_markup=tariffs_keyboard(tariffs, label_mode="price"),
         force_new=True,
     )
 
@@ -262,7 +285,7 @@ async def new_client_skip_tg(call: CallbackQuery, state: FSMContext) -> None:
     await _edit_or_send(
         call,
         _t(settings.text_tariff_pick_prompt),
-        reply_markup=tariffs_keyboard(tariffs),
+        reply_markup=tariffs_keyboard(tariffs, label_mode="price"),
         is_menu=True,
     )
     await call.answer()
@@ -349,6 +372,11 @@ async def tariff_pick(call: CallbackQuery, state: FSMContext) -> None:
 
     if current_state == RenewState.waiting_tariff.state:
         days = data.get("days") or settings.default_renew_days
+        old_tariff = data.get("renew_old_tariff") or _t(settings.text_client_tariff_default)
+        old_base_price = data.get("renew_old_base_price") or settings.base_subscription_price
+        client_price = data.get("renew_client_price") or "—"
+        old_monthly_value = data.get("renew_client_price_value") or 0
+        days_left = data.get("renew_days_left") or 0
         async with SessionLocal() as session:
             if target_agent_id:
                 target_agent = await get_agent_by_id(session, target_agent_id)
@@ -382,15 +410,30 @@ async def tariff_pick(call: CallbackQuery, state: FSMContext) -> None:
                 await call.answer()
                 return
         await state.set_state(RenewState.waiting_amount)
+        amount_prompt = _t(settings.text_renew_amount_prompt_with_prev, prev=client_price)
+        upgrade_note = ""
+        if days_left > 0 and (tariff.get("base_price") or settings.base_subscription_price) > old_base_price:
+            extra = _calc_base_debt(settings, days_left, (tariff.get("base_price") or settings.base_subscription_price) - old_base_price)
+            upgrade_note = _t(settings.text_renew_upgrade_note, days_left=days_left, extra=extra)
+        prompt_text = _t(
+            settings.text_renew_amount_context,
+            old_tariff=old_tariff,
+            old_base_price=old_base_price,
+            new_tariff=tariff.get("name"),
+            new_base_price=base_price,
+            client_price=client_price,
+            prompt=f"{upgrade_note}{amount_prompt}",
+        )
+        await state.update_data(renew_amount_prompt=prompt_text)
         await _edit_or_send(
             call,
             _t(
-                settings.text_tariff_selected,
+                settings.text_renew_tariff_selected,
                 name=tariff.get("name"),
                 price=base_price,
                 traffic=traffic,
                 desc=desc_line,
-                prompt=_t(settings.text_renew_amount_prompt),
+                prompt=prompt_text,
             ),
             reply_markup=tariff_actions_keyboard(),
             is_menu=True,
@@ -549,7 +592,7 @@ async def _create_client_in_remnawave(
             return
 
         try:
-            result = await create_or_extend_user(
+            result = await create_user_only(
                 username=username,
                 days=settings.default_renew_days,
                 description=f"agent:{agent.telegram_id}",
@@ -565,6 +608,16 @@ async def _create_client_in_remnawave(
                 name=actor_name,
                 is_owner=actor_id == settings.owner_telegram_id,
                 status_text=_t(settings.text_create_error, error=exc),
+            )
+            return
+        if result.get("exists"):
+            await _show_status_then_menu(
+                bot=message.bot,
+                chat_id=message.chat.id,
+                user_id=actor_id,
+                name=actor_name,
+                is_owner=actor_id == settings.owner_telegram_id,
+                status_text=_t(settings.text_username_taken_panel, username=username),
             )
             return
 
@@ -696,7 +749,7 @@ async def _render_clients_list(call: CallbackQuery, page: int, edit: bool = Fals
         await _edit_or_send(call, _t(settings.text_clients_list_empty), reply_markup=back_to_menu_keyboard(), is_menu=True)
         return
 
-    page_size = 20
+    page_size = 5
     total_pages = max(1, (len(lines) + page_size - 1) // page_size)
     page = max(1, min(page, total_pages))
     start_idx = (page - 1) * page_size
@@ -706,7 +759,10 @@ async def _render_clients_list(call: CallbackQuery, page: int, edit: bool = Fals
         if is_owner or is_admin
         else _t(settings.text_clients_list_header_agent)
     )
-    status_text = "\n".join([f"{header} · {page}/{total_pages}", *lines[start_idx:end_idx]])
+    separator = _t(settings.text_client_list_separator)
+    page_lines = lines[start_idx:end_idx]
+    body = f"\n{separator}\n".join(page_lines) if separator else "\n\n".join(page_lines)
+    status_text = f"{header} · {page}/{total_pages}\n\n{body}"
 
     if edit:
         await _edit_or_send(

@@ -195,7 +195,7 @@ async def _get_balance(user_id: int, name: str) -> tuple[int, int]:
 
 async def _show_start_menu(message: Message) -> None:
     settings = get_settings()
-    is_owner = message.from_user.id == settings.owner_telegram_id
+    is_owner = message.from_user.id == settings.owner_telegram_id or message.from_user.id in settings.admin_id_set
     tariffs = settings.visible_tariffs(message.from_user.id)
     base_price = tariffs[0]["base_price"] if tariffs else settings.base_subscription_price
     example_total = base_price + 150
@@ -220,7 +220,7 @@ async def start(message: Message, state: FSMContext) -> None:
     await state.clear()
     settings = get_settings()
     user_id = message.from_user.id
-    is_owner = user_id == settings.owner_telegram_id
+    is_owner = user_id == settings.owner_telegram_id or user_id in settings.admin_id_set
     is_admin = user_id in settings.admin_id_set
     is_agent = False
 
@@ -265,7 +265,8 @@ async def cancel_callback(call: CallbackQuery, state: FSMContext) -> None:
         chat_id=call.message.chat.id,
         user_id=call.from_user.id,
         name=call.from_user.full_name,
-        is_owner=call.from_user.id == settings.owner_telegram_id,
+        is_owner=call.from_user.id == settings.owner_telegram_id
+        or call.from_user.id in settings.admin_id_set,
         text=_t(settings.text_main_menu_prompt),
         force_new=False,
     )
@@ -281,7 +282,8 @@ async def menu_callback(call: CallbackQuery, state: FSMContext) -> None:
         chat_id=call.message.chat.id,
         user_id=call.from_user.id,
         name=call.from_user.full_name,
-        is_owner=call.from_user.id == settings.owner_telegram_id,
+        is_owner=call.from_user.id == settings.owner_telegram_id
+        or call.from_user.id in settings.admin_id_set,
         text=_t(settings.text_main_menu_prompt),
         force_new=False,
     )
@@ -349,7 +351,8 @@ async def balance_refresh(call: CallbackQuery) -> None:
     try:
         await call.message.edit_reply_markup(
             reply_markup=main_menu(
-                is_owner=call.from_user.id == settings.owner_telegram_id,
+                is_owner=call.from_user.id == settings.owner_telegram_id
+                or call.from_user.id in settings.admin_id_set,
                 balance=balance,
                 credit_limit=limit,
             )

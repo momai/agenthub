@@ -36,19 +36,31 @@ def owner_agents_menu() -> InlineKeyboardMarkup:
     settings = get_settings()
     return InlineKeyboardMarkup(
         inline_keyboard=[
+            # Управление агентами
             [InlineKeyboardButton(text=_t(settings.btn_owner_add_agent), callback_data="owner:add_agent")],
-            [InlineKeyboardButton(text=_t(settings.btn_owner_limit), callback_data="owner:limit")],
-            [InlineKeyboardButton(text=_t(settings.btn_owner_report), callback_data="owner:report")],
+            [
+                InlineKeyboardButton(text=_t(settings.btn_owner_limit), callback_data="owner:limit"),
+                InlineKeyboardButton(text=_t(settings.btn_owner_report), callback_data="owner:report"),
+            ],
+            # Уведомления
             [
                 InlineKeyboardButton(
                     text=_t(settings.btn_owner_notify_preview), callback_data="owner:notify:preview"
-                )
-            ],
-            [
+                ),
                 InlineKeyboardButton(
                     text=_t(settings.btn_owner_notify_send), callback_data="owner:notify:send"
-                )
+                ),
             ],
+            # Удаление
+            [
+                InlineKeyboardButton(
+                    text=_t(settings.btn_owner_delete_client), callback_data="owner:delete:client"
+                ),
+                InlineKeyboardButton(
+                    text=_t(settings.btn_owner_delete_agent), callback_data="owner:delete:agent"
+                ),
+            ],
+            # Служебное
             [InlineKeyboardButton(text=_t(settings.btn_owner_sync), callback_data="owner:sync")],
             [InlineKeyboardButton(text=_t(settings.btn_owner_back), callback_data="owner:back")],
         ]
@@ -65,10 +77,37 @@ def skip_keyboard(action: str) -> InlineKeyboardMarkup:
     )
 
 
+def renew_days_keyboard() -> InlineKeyboardMarkup:
+    settings = get_settings()
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text=_t(settings.btn_renew_default_days), callback_data="renew:days:30"),
+                InlineKeyboardButton(text=_t(settings.btn_renew_90_days), callback_data="renew:days:90"),
+            ],
+            [
+                InlineKeyboardButton(text=_t(settings.btn_renew_180_days), callback_data="renew:days:180"),
+                InlineKeyboardButton(text=_t(settings.btn_renew_365_days), callback_data="renew:days:365"),
+            ],
+            [InlineKeyboardButton(text=_t(settings.btn_back), callback_data="renew:back")],
+        ]
+    )
+
+
 def cancel_keyboard() -> InlineKeyboardMarkup:
     settings = get_settings()
     return InlineKeyboardMarkup(
         inline_keyboard=[
+            [InlineKeyboardButton(text=_t(settings.btn_cancel), callback_data="cancel")],
+        ]
+    )
+
+
+def delete_confirm_keyboard(confirm_cb: str) -> InlineKeyboardMarkup:
+    settings = get_settings()
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=_t(settings.btn_delete_confirm), callback_data=confirm_cb)],
             [InlineKeyboardButton(text=_t(settings.btn_cancel), callback_data="cancel")],
         ]
     )
@@ -83,12 +122,19 @@ def back_to_menu_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def clients_keyboard(client_rows: list[tuple[int, str | None, str]], include_cancel: bool = False) -> InlineKeyboardMarkup:
+def clients_keyboard(
+    client_rows: list[tuple[int, str | None, int | None]],
+    include_cancel: bool = False,
+) -> InlineKeyboardMarkup:
+    """
+    client_rows: list of (client_id, username, monthly_price)
+    """
     settings = get_settings()
     rows = []
-    for client_id, username, expires in client_rows:
+    for client_id, username, price in client_rows:
         label = username or f"client-{client_id}"
-        label = _t(settings.text_client_button_label, username=label, meta=expires)
+        price_part = f" · {price}₽" if price else ""
+        label = f"{label}{price_part}"
         rows.append([InlineKeyboardButton(text=label, callback_data=f"renew:pick:{client_id}")])
     rows.append([InlineKeyboardButton(text=_t(settings.btn_back_to_menu), callback_data="menu")])
     if include_cancel:
@@ -96,16 +142,33 @@ def clients_keyboard(client_rows: list[tuple[int, str | None, str]], include_can
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def tariffs_keyboard(tariffs: list[dict]) -> InlineKeyboardMarkup:
+def tariffs_keyboard(
+    tariffs: list[dict],
+    include_back: bool = False,
+    back_callback: str = "cancel",
+    include_cancel: bool = True,
+    label_mode: str = "traffic",
+    top_button: tuple[str, str] | None = None,
+) -> InlineKeyboardMarkup:
     settings = get_settings()
     rows = []
+    if top_button:
+        top_text, top_callback = top_button
+        rows.append([InlineKeyboardButton(text=top_text, callback_data=top_callback)])
     for tariff in tariffs:
         name = tariff.get("name") or "Тариф"
-        traffic_gb = (tariff.get("remnawave") or {}).get("traffic_limit_gb")
-        traffic = "безлимит" if not traffic_gb or traffic_gb <= 0 else f"{traffic_gb} ГБ"
-        label = f"{name} — {traffic}"
+        if label_mode == "price":
+            base_price = tariff.get("base_price") or settings.base_subscription_price
+            label = f"{name} — {base_price} ₽"
+        else:
+            traffic_gb = (tariff.get("remnawave") or {}).get("traffic_limit_gb")
+            traffic = "безлимит" if not traffic_gb or traffic_gb <= 0 else f"{traffic_gb} ГБ"
+            label = f"{name} — {traffic}"
         rows.append([InlineKeyboardButton(text=label, callback_data=f"tariff:pick:{tariff['id']}")])
-    rows.append([InlineKeyboardButton(text=_t(settings.btn_cancel), callback_data="cancel")])
+    if include_back:
+        rows.append([InlineKeyboardButton(text=_t(settings.btn_back), callback_data=back_callback)])
+    if include_cancel:
+        rows.append([InlineKeyboardButton(text=_t(settings.btn_cancel), callback_data="cancel")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -149,6 +212,34 @@ def agents_limit_keyboard(agent_rows: list[tuple[int, str, str]]) -> InlineKeybo
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def delete_agents_keyboard(agent_rows: list[tuple[int, str]]) -> InlineKeyboardMarkup:
+    rows = []
+    for agent_id, name in agent_rows:
+        rows.append([InlineKeyboardButton(text=name, callback_data=f"owner:delete:agent:pick:{agent_id}")])
+    rows.append([InlineKeyboardButton(text=_t(get_settings().btn_owner_back), callback_data="owner:agents")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def delete_agents_pagination_keyboard(
+    agent_rows: list[tuple[int, str]],
+    page: int,
+    total_pages: int,
+) -> InlineKeyboardMarkup:
+    settings = get_settings()
+    rows = []
+    for agent_id, name in agent_rows:
+        rows.append([InlineKeyboardButton(text=name, callback_data=f"owner:delete:agent:pick:{agent_id}")])
+    nav = []
+    if page > 1:
+        nav.append(InlineKeyboardButton(text=_t(settings.btn_prev), callback_data=f"owner:delete:agent:page:{page - 1}"))
+    if page < total_pages:
+        nav.append(InlineKeyboardButton(text=_t(settings.btn_next), callback_data=f"owner:delete:agent:page:{page + 1}"))
+    if nav:
+        rows.append(nav)
+    rows.append([InlineKeyboardButton(text=_t(settings.btn_owner_back), callback_data="owner:agents")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def agents_limit_pagination_keyboard(
     agent_rows: list[tuple[int, str, str]], page: int, total_pages: int
 ) -> InlineKeyboardMarkup:
@@ -175,16 +266,20 @@ def agents_limit_pagination_keyboard(
 
 
 def renew_clients_keyboard(
-    client_rows: list[tuple[int, str | None, str]],
+    client_rows: list[tuple[int, str | None, int | None]],
     page: int,
     total_pages: int,
     include_cancel: bool = False,
 ) -> InlineKeyboardMarkup:
+    """
+    client_rows: list of (client_id, username, monthly_price)
+    """
     settings = get_settings()
     rows = []
-    for client_id, username, expires in client_rows:
+    for client_id, username, price in client_rows:
         label = username or f"client-{client_id}"
-        label = _t(settings.text_client_button_label, username=label, meta=expires)
+        price_part = f" · {price}₽" if price else ""
+        label = f"{label}{price_part}"
         rows.append([InlineKeyboardButton(text=label, callback_data=f"renew:pick:{client_id}")])
     nav = []
     if page > 1:

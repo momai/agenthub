@@ -10,18 +10,28 @@ from app.bot.keyboards import (
     agents_limit_pagination_keyboard,
     agents_limit_keyboard,
     cancel_keyboard,
+    delete_confirm_keyboard,
+    delete_agents_keyboard,
+    delete_agents_pagination_keyboard,
     main_menu,
     owner_agents_menu,
 )
-from app.bot.states import AddAgentState, LimitAgentState
+from app.bot.states import AddAgentState, DeleteClientState, LimitAgentState
 from app.config import get_settings
 from app.db.session import SessionLocal
 from app.remnawave.client import RemnawaveClient
 from app.services.agent_service import (
     get_agent_by_id,
+    get_agent_by_telegram_id,
     get_agent_by_username,
     get_or_create_agent,
     list_agents,
+    delete_agent_by_id,
+)
+from app.services.client_service import (
+    get_client_by_tg_any,
+    get_client_by_username_any,
+    delete_client_by_id,
 )
 from app.services.notify_service import list_expiring_clients, notify_expiring_clients
 from app.services.sync_service import sync_all_clients_with_remnawave
@@ -31,6 +41,11 @@ from .menu import _edit_or_send, _render_error_prompt, _show_start_menu, _show_s
 
 
 router = Router()
+
+
+def _is_owner_or_admin(user_id: int) -> bool:
+    settings = get_settings()
+    return user_id == settings.owner_telegram_id or user_id in settings.admin_id_set
 
 
 async def _notify_expiring_send(
@@ -169,7 +184,7 @@ async def owner_notify_send(call: CallbackQuery) -> None:
 @router.callback_query(lambda call: call.data == "owner:agents")
 async def owner_agents(call: CallbackQuery) -> None:
     settings = get_settings()
-    if call.from_user.id != settings.owner_telegram_id:
+    if not _is_owner_or_admin(call.from_user.id):
         await call.answer(_t(settings.text_no_access_alert), show_alert=True)
         return
     await _edit_or_send(call, _t(settings.text_owner_agents_title), reply_markup=owner_agents_menu(), is_menu=True)
@@ -179,7 +194,7 @@ async def owner_agents(call: CallbackQuery) -> None:
 @router.callback_query(lambda call: call.data == "owner:limit")
 async def owner_limit_menu(call: CallbackQuery) -> None:
     settings = get_settings()
-    if call.from_user.id != settings.owner_telegram_id:
+    if not _is_owner_or_admin(call.from_user.id):
         await call.answer(_t(settings.text_no_access_alert), show_alert=True)
         return
     await _render_owner_limit_menu(call, page=1)
@@ -189,7 +204,7 @@ async def owner_limit_menu(call: CallbackQuery) -> None:
 @router.callback_query(lambda call: call.data.startswith("owner:limit:page:"))
 async def owner_limit_page(call: CallbackQuery) -> None:
     settings = get_settings()
-    if call.from_user.id != settings.owner_telegram_id:
+    if not _is_owner_or_admin(call.from_user.id):
         await call.answer(_t(settings.text_no_access_alert), show_alert=True)
         return
     try:
@@ -234,7 +249,7 @@ async def _render_owner_limit_menu(call: CallbackQuery, page: int) -> None:
 @router.callback_query(lambda call: call.data.startswith("owner:limit:pick:"))
 async def owner_limit_pick(call: CallbackQuery, state: FSMContext) -> None:
     settings = get_settings()
-    if call.from_user.id != settings.owner_telegram_id:
+    if not _is_owner_or_admin(call.from_user.id):
         await call.answer(_t(settings.text_no_access_alert), show_alert=True)
         return
     agent_id = int(call.data.split(":")[-1])
@@ -252,7 +267,7 @@ async def owner_limit_pick(call: CallbackQuery, state: FSMContext) -> None:
 @router.callback_query(lambda call: call.data == "owner:add_agent")
 async def owner_add_agent(call: CallbackQuery, state: FSMContext) -> None:
     settings = get_settings()
-    if call.from_user.id != settings.owner_telegram_id:
+    if not _is_owner_or_admin(call.from_user.id):
         await call.answer(_t(settings.text_no_access_alert), show_alert=True)
         return
     await state.set_state(AddAgentState.waiting_tg_id)
@@ -268,7 +283,7 @@ async def owner_add_agent(call: CallbackQuery, state: FSMContext) -> None:
 @router.message(AddAgentState.waiting_tg_id)
 async def owner_add_agent_message(message: Message, state: FSMContext) -> None:
     settings = get_settings()
-    if message.from_user.id != settings.owner_telegram_id:
+    if not _is_owner_or_admin(message.from_user.id):
         await message.answer(_t(settings.text_no_access_message))
         await state.clear()
         return
@@ -348,7 +363,7 @@ async def owner_add_agent_message(message: Message, state: FSMContext) -> None:
 @router.message(LimitAgentState.waiting_limit)
 async def owner_limit_set(message: Message, state: FSMContext) -> None:
     settings = get_settings()
-    if message.from_user.id != settings.owner_telegram_id:
+    if not _is_owner_or_admin(message.from_user.id):
         await message.answer(_t(settings.text_no_access_message))
         await state.clear()
         return
@@ -414,7 +429,7 @@ async def owner_limit_set(message: Message, state: FSMContext) -> None:
 @router.callback_query(lambda call: call.data == "owner:sync")
 async def owner_sync(call: CallbackQuery) -> None:
     settings = get_settings()
-    if call.from_user.id != settings.owner_telegram_id:
+    if not _is_owner_or_admin(call.from_user.id):
         await call.answer(_t(settings.text_no_access_alert), show_alert=True)
         return
 
@@ -439,7 +454,7 @@ async def owner_sync(call: CallbackQuery) -> None:
 @router.callback_query(lambda call: call.data == "owner:report")
 async def owner_report(call: CallbackQuery) -> None:
     settings = get_settings()
-    if call.from_user.id != settings.owner_telegram_id:
+    if not _is_owner_or_admin(call.from_user.id):
         await call.answer(_t(settings.text_no_access_alert), show_alert=True)
         return
     async with SessionLocal() as session:
@@ -469,10 +484,212 @@ async def owner_report(call: CallbackQuery) -> None:
     await call.answer()
 
 
+@router.callback_query(lambda call: call.data == "owner:delete:client")
+async def owner_delete_client(call: CallbackQuery, state: FSMContext) -> None:
+    settings = get_settings()
+    if not _is_owner_or_admin(call.from_user.id):
+        await call.answer(_t(settings.text_no_access_alert), show_alert=True)
+        return
+    await state.set_state(DeleteClientState.waiting_username)
+    await _edit_or_send(
+        call,
+        _t(settings.text_owner_delete_client_prompt),
+        reply_markup=cancel_keyboard(),
+        is_menu=True,
+    )
+    await call.answer()
+
+
+@router.message(DeleteClientState.waiting_username)
+async def owner_delete_client_message(message: Message, state: FSMContext) -> None:
+    settings = get_settings()
+    if not _is_owner_or_admin(message.from_user.id):
+        await message.answer(_t(settings.text_no_access_message))
+        await state.clear()
+        return
+    if _is_start(message.text):
+        await state.clear()
+        await _show_start_menu(message)
+        return
+    if _is_cancel(message.text):
+        await state.clear()
+        await _show_start_menu(message)
+        return
+    forward_user = message.forward_from
+    raw = (message.text or "").strip().lstrip("@")
+    async with SessionLocal() as session:
+        client = None
+        if forward_user:
+            client = await get_client_by_tg_any(session, telegram_id=forward_user.id)
+        else:
+            client = await get_client_by_username_any(session, raw)
+    if not client:
+        await _render_error_prompt(
+            bot=message.bot,
+            chat_id=message.chat.id,
+            user_id=message.from_user.id,
+            name=message.from_user.full_name,
+            error_text=_t(settings.text_owner_delete_not_found),
+            prompt_text=_t(settings.text_owner_delete_client_prompt),
+        )
+        return
+    await state.update_data(delete_client_id=client.id, delete_client_username=client.username)
+    await state.set_state(DeleteClientState.confirm)
+    await _render_menu_text(
+        bot=message.bot,
+        chat_id=message.chat.id,
+        user_id=message.from_user.id,
+        name=message.from_user.full_name,
+        text=_t(settings.text_owner_delete_client_confirm, username=client.username),
+        reply_markup=delete_confirm_keyboard(f"owner:delete:client:confirm:{client.id}"),
+        force_new=True,
+    )
+
+
+@router.callback_query(lambda call: call.data.startswith("owner:delete:client:confirm:"))
+async def owner_delete_client_confirm(call: CallbackQuery, state: FSMContext) -> None:
+    settings = get_settings()
+    if not _is_owner_or_admin(call.from_user.id):
+        await call.answer(_t(settings.text_no_access_alert), show_alert=True)
+        return
+    try:
+        client_id = int(call.data.split(":")[-1])
+    except ValueError:
+        await call.answer(_t(settings.text_page_invalid), show_alert=True)
+        return
+    data = await state.get_data()
+    async with SessionLocal() as session:
+        deleted = await delete_client_by_id(session, client_id)
+    await state.clear()
+    username = data.get("delete_client_username") if deleted else None
+    status_text = (
+        _t(settings.text_owner_delete_client_done, username=username or str(client_id))
+        if deleted
+        else _t(settings.text_owner_delete_not_found)
+    )
+    await _show_status_then_menu(
+        bot=call.bot,
+        chat_id=call.message.chat.id,
+        user_id=call.from_user.id,
+        name=call.from_user.full_name,
+        is_owner=_is_owner_or_admin(call.from_user.id),
+        status_text=status_text,
+    )
+    await call.answer()
+
+
+@router.callback_query(lambda call: call.data == "owner:delete:agent")
+async def owner_delete_agent(call: CallbackQuery, state: FSMContext) -> None:
+    settings = get_settings()
+    if not _is_owner_or_admin(call.from_user.id):
+        await call.answer(_t(settings.text_no_access_alert), show_alert=True)
+        return
+    await _render_owner_delete_agent_menu(call, page=1)
+    await call.answer()
+
+
+@router.callback_query(lambda call: call.data.startswith("owner:delete:agent:page:"))
+async def owner_delete_agent_page(call: CallbackQuery) -> None:
+    settings = get_settings()
+    if not _is_owner_or_admin(call.from_user.id):
+        await call.answer(_t(settings.text_no_access_alert), show_alert=True)
+        return
+    try:
+        page = int(call.data.split(":")[-1])
+    except ValueError:
+        await call.answer(_t(settings.text_page_invalid), show_alert=True)
+        return
+    await _render_owner_delete_agent_menu(call, page=page)
+    await call.answer()
+
+
+async def _render_owner_delete_agent_menu(call: CallbackQuery, page: int) -> None:
+    settings = get_settings()
+    async with SessionLocal() as session:
+        agents_with_counts = await list_agents(session)
+    if not agents_with_counts:
+        await _edit_or_send(call, _t(settings.text_owner_report_no_agents), reply_markup=owner_agents_menu(), is_menu=True)
+        return
+    rows = [(agent.id, _agent_display(agent)) for agent, _ in agents_with_counts]
+    page_size = 8
+    total_pages = max(1, math.ceil(len(rows) / page_size))
+    page = max(1, min(page, total_pages))
+    start = (page - 1) * page_size
+    end = start + page_size
+    page_rows = rows[start:end]
+    reply_markup = (
+        delete_agents_keyboard(page_rows)
+        if total_pages == 1
+        else delete_agents_pagination_keyboard(page_rows, page, total_pages)
+    )
+    await _edit_or_send(
+        call,
+        _t(settings.text_owner_delete_agent_pick),
+        reply_markup=reply_markup,
+        is_menu=True,
+    )
+
+
+@router.callback_query(lambda call: call.data.startswith("owner:delete:agent:pick:"))
+async def owner_delete_agent_pick(call: CallbackQuery) -> None:
+    settings = get_settings()
+    if not _is_owner_or_admin(call.from_user.id):
+        await call.answer(_t(settings.text_no_access_alert), show_alert=True)
+        return
+    try:
+        agent_id = int(call.data.split(":")[-1])
+    except ValueError:
+        await call.answer(_t(settings.text_page_invalid), show_alert=True)
+        return
+    async with SessionLocal() as session:
+        agent = await get_agent_by_id(session, agent_id)
+    if not agent:
+        await call.answer(_t(settings.text_owner_delete_not_found), show_alert=True)
+        return
+    await _edit_or_send(
+        call,
+        _t(settings.text_owner_delete_agent_confirm, name=_agent_display(agent)),
+        reply_markup=delete_confirm_keyboard(f"owner:delete:agent:confirm:{agent.id}"),
+        is_menu=True,
+    )
+
+
+
+
+@router.callback_query(lambda call: call.data.startswith("owner:delete:agent:confirm:"))
+async def owner_delete_agent_confirm(call: CallbackQuery, state: FSMContext) -> None:
+    settings = get_settings()
+    if not _is_owner_or_admin(call.from_user.id):
+        await call.answer(_t(settings.text_no_access_alert), show_alert=True)
+        return
+    try:
+        agent_id = int(call.data.split(":")[-1])
+    except ValueError:
+        await call.answer(_t(settings.text_page_invalid), show_alert=True)
+        return
+    async with SessionLocal() as session:
+        agent, clients_deleted = await delete_agent_by_id(session, agent_id)
+    await state.clear()
+    status_text = (
+        _t(settings.text_owner_delete_agent_done, name=_agent_display(agent), clients=clients_deleted)
+        if agent
+        else _t(settings.text_owner_delete_not_found)
+    )
+    await _show_status_then_menu(
+        bot=call.bot,
+        chat_id=call.message.chat.id,
+        user_id=call.from_user.id,
+        name=call.from_user.full_name,
+        is_owner=_is_owner_or_admin(call.from_user.id),
+        status_text=status_text,
+    )
+    await call.answer()
+
+
 @router.callback_query(lambda call: call.data == "owner:back")
 async def owner_back(call: CallbackQuery) -> None:
     settings = get_settings()
-    if call.from_user.id != settings.owner_telegram_id:
+    if not _is_owner_or_admin(call.from_user.id):
         await call.answer(_t(settings.text_no_access_alert), show_alert=True)
         return
     await _edit_or_send(

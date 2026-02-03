@@ -25,3 +25,8 @@ class AddAgentState(StatesGroup):
 
 class LimitAgentState(StatesGroup):
     waiting_limit = State()
+
+
+class DeleteClientState(StatesGroup):
+    waiting_username = State()
+    confirm = State()

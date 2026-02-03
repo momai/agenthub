@@ -4,17 +4,23 @@ from datetime import datetime, timezone, timedelta
 
 import logging
 
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Client, Agent
+from app.models import Renewal
 
 
 async def get_client_by_tg(session: AsyncSession, agent_id: int, telegram_id: int) -> Client | None:
     result = await session.execute(
         select(Client).where(Client.agent_id == agent_id, Client.telegram_id == telegram_id)
     )
+    return result.scalar_one_or_none()
+
+
+async def get_client_by_tg_any(session: AsyncSession, telegram_id: int) -> Client | None:
+    result = await session.execute(select(Client).where(Client.telegram_id == telegram_id))
     return result.scalar_one_or_none()
 
 
@@ -81,6 +87,16 @@ async def list_clients_with_agents(session: AsyncSession) -> list[tuple[Client, 
         .order_by(Agent.name, Client.username)
     )
     return list(result.all())
+
+
+async def delete_client_by_id(session: AsyncSession, client_id: int) -> bool:
+    client = await get_client_by_id(session, client_id)
+    if not client:
+        return False
+    await session.execute(delete(Renewal).where(Renewal.client_id == client_id))
+    await session.execute(delete(Client).where(Client.id == client_id))
+    await session.commit()
+    return True
 
 
 def add_days(current: datetime | None, days: int) -> datetime:

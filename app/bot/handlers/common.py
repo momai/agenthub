@@ -52,6 +52,12 @@ def _calc_base_debt(settings, days: int, base_price: int | None = None) -> int:
     return max(0, math.ceil((base_price * days) / settings.default_renew_days))
 
 
+def _calc_amount_by_days(settings, amount_monthly: int, days: int) -> int:
+    if settings.default_renew_days <= 0:
+        return max(1, amount_monthly)
+    return max(1, math.ceil((amount_monthly * days) / settings.default_renew_days))
+
+
 def _format_traffic(limit_gb: int | None) -> str:
     if not limit_gb or limit_gb <= 0:
         return "безлимит"

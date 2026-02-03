@@ -116,11 +116,49 @@ class Settings(BaseSettings):
     text_client_not_found_alert: str = "Клиент не найден"
     text_client_not_found: str = "❌ Клиент не найден"
     text_client_exists: str = "ℹ️ Клиент уже есть — используй <b>Продлить</b>"
+    text_username_taken_panel: str = "❌ Имя <code>{username}</code> уже занято в панели. Введи другое."
 
     # ─── Продление ────────────────────────────────────────────────
+    renew_min_days_left: int = 10
     text_renew_pick_prompt_owner: str = "🔄 <b>Продление подписки</b>\\n\\nВыбери клиента или введи username:"
     text_renew_pick_prompt_agent: str = "🔄 <b>Продление подписки</b>\\n\\nВыбери клиента или введи username:"
-    text_renew_days_prompt: str = "📅 <b>Срок продления</b>\\n\\n<i>Введи количество дней или пропусти (по умолчанию 30)</i>"
+    text_renew_tariff_pick_prompt: str = (
+        "📦 <b>Выбери тариф</b>\\n\\n"
+        "Текущий тариф: <b>{old_tariff}</b> ({old_base_price} ₽)\\n"
+        "Цена клиента: <b>{client_price}</b>\\n\\n"
+        "<i>От тарифа зависит цена для владельца</i>"
+    )
+    text_renew_client_card: str = (
+        "👤 <b>{username}</b>\\n\\n"
+        "📦 Тариф: <b>{tariff}</b> ({base_price} ₽)\\n"
+        "⏳ Осталось: <b>{days_left}</b>\\n"
+        "💵 Цена клиента: <b>{price}/мес</b>\\n\\n"
+        "━━━━━━━━━━━━━━━━━━━━━\\n\\n"
+        "📅 <b>Срок продления</b>"
+    )
+    text_renew_days_prompt: str = "📅 <b>Срок продления</b>\\n\\n<i>Выбери срок кнопками ниже</i>"
+    text_renew_days_buttons_only: str = "ℹ️ Используй кнопки ниже для выбора срока"
+    text_renew_amount_prompt_with_prev: str = "💵 <b>Сколько берёшь с клиента?</b> (была {prev})"
+    text_renew_amount_context: str = (
+        "📌 Было: <b>{old_tariff}</b> ({old_base_price} ₽)\\n"
+        "🆕 Будет: <b>{new_tariff}</b> ({new_base_price} ₽)\\n"
+        "💵 Цена клиента: <b>{client_price}</b>\\n\\n"
+        "{prompt}"
+    )
+    text_renew_upgrade_note: str = (
+        "⚠️ Тариф выше: остаток {days_left}д перенесётся и добавится к сумме: <b>+{extra} ₽</b>\\n"
+    )
+    text_renew_too_early: str = (
+        "⏳ Продление доступно, когда осталось ≤ {min_days} дней.\\n"
+        "Сейчас: {days_left}д"
+    )
+    text_renew_tariff_selected: str = (
+        "✅ <b>Тариф:</b> {name}\\n\\n"
+        "💰 Цена владельцу: <b>{price} ₽</b>\\n"
+        "📶 Трафик: <b>{traffic}</b>\\n"
+        "{desc}\\n\\n"
+        "{prompt}"
+    )
     text_days_invalid: str = "❌ Введи число дней"
     text_days_positive: str = "❌ Дней должно быть больше нуля"
     text_page_invalid: str = "Неверная страница"
@@ -213,6 +251,17 @@ class Settings(BaseSettings):
     text_owner_add_agent_prompt: str = "📱 <b>Telegram ID агента</b>\\n\\n<i>или перешли его сообщение сюда</i>"
     text_owner_add_agent_done: str = "✅ Агент добавлен"
     text_owner_add_agent_forward_failed: str = "❌ Не удалось определить отправителя\\n\\nПришли его <b>Telegram ID</b>"
+    text_owner_delete_client_prompt: str = "🗑 <b>Удалить клиента</b>\\n\\nВведи username или перешли сообщение клиента"
+    text_owner_delete_agent_prompt: str = "🗑 <b>Удалить агента</b>\\n\\nВведи Telegram ID, @username или перешли сообщение"
+    text_owner_delete_agent_pick: str = "🗑 <b>Выбери агента для удаления</b>"
+    text_owner_delete_client_confirm: str = "⚠️ Удалить клиента <b>{username}</b>?\\nЭто действие необратимо."
+    text_owner_delete_agent_confirm: str = (
+        "⚠️ Удалить агента <b>{name}</b>?\\n"
+        "Будут удалены его клиенты и связанные данные."
+    )
+    text_owner_delete_client_done: str = "✅ Клиент удалён: <b>{username}</b>"
+    text_owner_delete_agent_done: str = "✅ Агент удалён: <b>{name}</b>\\nУдалено клиентов: {clients}"
+    text_owner_delete_not_found: str = "❌ Не найдено"
     text_limit_invalid: str = "❌ Введи число"
     text_limit_negative: str = "❌ Лимит не может быть отрицательным"
     text_agent_not_found: str = "❌ Агент не найден"
@@ -221,7 +270,7 @@ class Settings(BaseSettings):
     text_owner_sync_done: str = "✅ <b>Синхронизация завершена</b>\\n\\nУдалено: {removed}\\nОбновлено: {updated}"
     text_owner_report_no_agents: str = "📭 Агентов пока нет"
     text_owner_report_header: str = "📊 <b>Отчёт по агентам</b>\\n"
-    text_owner_report_line: str = "{status} <b>{name}</b> · <code>{id}</code>\\n   💰 {payable} ₽ · лимит {limit} · {clients} клиентов"
+    text_owner_report_line: str = "{status} <b>{name}</b>\\n  💰 {payable} ₽ · лимит {limit} · клиентов {clients}"
 
     # ─── Общие ────────────────────────────────────────────────────
     text_cancelled: str = "👌 Отменено"
@@ -236,15 +285,16 @@ class Settings(BaseSettings):
     text_client_meta: str = "{date} · {payment}₽"
     text_client_price: str = "{price}₽"
     text_client_price_none: str = "—"
-    text_client_tariff: str = "{name} {price}₽"
+    text_client_tariff: str = "📦 {name} ({price}₽)"
     text_client_tariff_default: str = "Базовый"
     text_client_tariff_none: str = "—"
     text_client_paid: str = "{amount}₽"
     text_client_paid_none: str = "—"
     text_client_line: str = (
-        "👤 <b>{username}</b>{agent_part}\\n"
-        "   ⏳ {date} · 📦 {tariff} · 💵 {price}/мес · 🧾 {paid}"
+        "▸ <b>{username}</b>{agent_part}\\n"
+        "  {tariff} · {date} · агентская {price}/мес"
     )
+    text_client_list_separator: str = ""
     text_clients_list_empty: str = "📭 <b>Клиентов пока нет</b>\\n\\n<i>Подключи первого через «+ Подключить»</i>"
     text_clients_list_header_agent: str = "📋 <b>Твои клиенты</b>\\n"
     text_clients_list_header_owner: str = "📋 <b>Все клиенты</b>\\n"
@@ -259,15 +309,23 @@ class Settings(BaseSettings):
     btn_renew: str = "🔄 Продлить"
     btn_clients: str = "📋 Клиенты"
     btn_pay: str = "💸 Внести оплату"
-    btn_owner_agents: str = "⚙️ Агенты"
-    btn_owner_add_agent: str = "➕ Добавить"
-    btn_owner_limit: str = "💳 Лимиты"
-    btn_owner_report: str = "📊 Отчёт"
+    btn_owner_agents: str = "⚙️ Управление агентами"
+    btn_owner_add_agent: str = "➕ Добавить агента"
+    btn_owner_limit: str = "💳 Лимиты агентов"
+    btn_owner_report: str = "📊 Отчёт по агентам"
     btn_owner_sync: str = "🔄 Синхронизация"
-    btn_owner_notify_preview: str = "🔔 Кому придёт"
-    btn_owner_notify_send: str = "📣 Отправить"
+    btn_owner_notify_preview: str = "👀 Кто получит уведомления"
+    btn_owner_notify_send: str = "📨 Отправить уведомления"
+    btn_owner_delete_client: str = "🗑️ Удалить клиента"
+    btn_owner_delete_agent: str = "🗑️ Удалить агента"
     btn_owner_back: str = "← Назад"
     btn_skip: str = "Пропустить →"
+    btn_renew_default_days: str = "30 дней"
+    btn_renew_90_days: str = "90 дней"
+    btn_renew_180_days: str = "180 дней"
+    btn_renew_365_days: str = "365 дней"
+    btn_renew_same: str = "✅ Продлить как есть"
+    btn_back: str = "← Назад"
     btn_cancel: str = "✕ Отмена"
     btn_back_to_menu: str = "← Меню"
     btn_prev: str = "←"
@@ -276,6 +334,7 @@ class Settings(BaseSettings):
     btn_transfer_reject: str = "✕ Не получал"
     btn_tariff_back: str = "← К тарифам"
     btn_tariffs: str = "📦 Тарифы"
+    btn_delete_confirm: str = "🗑 Удалить"
 
     def _parse_base_price(self, raw: Optional[str]) -> Optional[int]:
         if raw is None:

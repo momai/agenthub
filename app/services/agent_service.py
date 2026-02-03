@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from sqlalchemy import select, func
+from sqlalchemy import select, func, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.models import Agent, Client
+from app.models import Agent, Client, DebtEvent, Renewal, TransferRequest
 
 
 async def get_or_create_agent(
@@ -62,3 +62,20 @@ async def list_agents(session: AsyncSession) -> list[tuple[Agent, int]]:
         client_count = len(count_result.scalars().all())
         output.append((agent, client_count))
     return output
+
+
+async def delete_agent_by_id(session: AsyncSession, agent_id: int) -> tuple[Agent | None, int]:
+    agent = await get_agent_by_id(session, agent_id)
+    if not agent:
+        return None, 0
+    client_ids_result = await session.execute(select(Client.id).where(Client.agent_id == agent_id))
+    client_ids = [row[0] for row in client_ids_result.all()]
+    if client_ids:
+        await session.execute(delete(Renewal).where(Renewal.client_id.in_(client_ids)))
+        await session.execute(delete(Client).where(Client.id.in_(client_ids)))
+    await session.execute(delete(Renewal).where(Renewal.agent_id == agent_id))
+    await session.execute(delete(TransferRequest).where(TransferRequest.agent_id == agent_id))
+    await session.execute(delete(DebtEvent).where(DebtEvent.agent_id == agent_id))
+    await session.execute(delete(Agent).where(Agent.id == agent_id))
+    await session.commit()
+    return agent, len(client_ids)

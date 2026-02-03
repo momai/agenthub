@@ -13,6 +13,7 @@ class RenewState(StatesGroup):
     waiting_days = State()
     waiting_tariff = State()
     waiting_amount = State()
+    waiting_confirm = State()
 
 
 class PayDebtState(StatesGroup):

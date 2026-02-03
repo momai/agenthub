@@ -415,6 +415,7 @@ async def tariff_pick(call: CallbackQuery, state: FSMContext) -> None:
         if days_left > 0 and (tariff.get("base_price") or settings.base_subscription_price) > old_base_price:
             extra = _calc_base_debt(settings, days_left, (tariff.get("base_price") or settings.base_subscription_price) - old_base_price)
             upgrade_note = _t(settings.text_renew_upgrade_note, days_left=days_left, extra=extra)
+        profit_label = f"{old_monthly_value - base_price} ₽/мес" if old_monthly_value else "—"
         prompt_text = _t(
             settings.text_renew_amount_context,
             old_tariff=old_tariff,
@@ -433,6 +434,7 @@ async def tariff_pick(call: CallbackQuery, state: FSMContext) -> None:
                 price=base_price,
                 traffic=traffic,
                 desc=desc_line,
+                profit=profit_label,
                 prompt=prompt_text,
             ),
             reply_markup=tariff_actions_keyboard(),

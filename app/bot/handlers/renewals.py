@@ -10,6 +10,7 @@ from app.bot.keyboards import (
     back_to_menu_keyboard,
     cancel_keyboard,
     clients_keyboard,
+    renew_confirm_keyboard,
     renew_clients_keyboard,
     renew_days_keyboard,
     tariffs_keyboard,
@@ -85,6 +86,39 @@ def _format_expires_short(expires_at: datetime | None) -> str:
     if not expires_at:
         return "—"
     return f"{_days_left_int(expires_at)}д"
+
+
+def _calc_renew_preview(
+    settings,
+    *,
+    data: dict,
+    amount_monthly: int,
+    base_price: int,
+) -> tuple[int, int, int, int]:
+    days = data.get("days") or settings.default_renew_days
+    try:
+        days = int(days)
+    except (TypeError, ValueError):
+        days = settings.default_renew_days
+    if days <= 0:
+        days = settings.default_renew_days
+
+    amount_total = _calc_amount_by_days(settings, amount_monthly, days)
+    old_base_price = data.get("renew_old_base_price") or settings.base_subscription_price
+    old_monthly_price = data.get("renew_client_price_value") or 0
+    days_left = data.get("renew_days_left") or 0
+
+    extra_client = 0
+    if amount_monthly > old_monthly_price and days_left > 0:
+        extra_client = _calc_amount_by_days(settings, amount_monthly - old_monthly_price, days_left)
+        amount_total += extra_client
+
+    owner_share = _calc_base_debt(settings, days, base_price)
+    if base_price > old_base_price and days_left > 0:
+        owner_share += _calc_base_debt(settings, days_left, base_price - old_base_price)
+
+    profit = amount_total - owner_share
+    return amount_total, owner_share, profit, extra_client
 
 
 async def _render_renew_list(call: CallbackQuery, page: int) -> None:
@@ -432,6 +466,8 @@ async def renew_days(message: Message, state: FSMContext) -> None:
     old_tariff = data.get("renew_old_tariff") or _t(settings.text_client_tariff_default)
     old_base_price = data.get("renew_old_base_price") or settings.base_subscription_price
     client_price = data.get("renew_client_price") or "—"
+    client_price_value = data.get("renew_client_price_value") or 0
+    profit_label = f"{client_price_value - old_base_price} ₽/мес" if client_price_value else "—"
     await _render_menu_text(
         bot=message.bot,
         chat_id=message.chat.id,
@@ -442,6 +478,7 @@ async def renew_days(message: Message, state: FSMContext) -> None:
             old_tariff=old_tariff,
             old_base_price=old_base_price,
             client_price=client_price,
+            profit=profit_label,
         ),
         reply_markup=tariffs_keyboard(
             tariffs,
@@ -504,6 +541,8 @@ async def _renew_select_days(call: CallbackQuery, state: FSMContext, days: int) 
     old_tariff = data.get("renew_old_tariff") or _t(settings.text_client_tariff_default)
     old_base_price = data.get("renew_old_base_price") or settings.base_subscription_price
     client_price = data.get("renew_client_price") or "—"
+    client_price_value = data.get("renew_client_price_value") or 0
+    profit_label = f"{client_price_value - old_base_price} ₽/мес" if client_price_value else "—"
     await _edit_or_send(
         call,
         _t(
@@ -511,6 +550,7 @@ async def _renew_select_days(call: CallbackQuery, state: FSMContext, days: int) 
             old_tariff=old_tariff,
             old_base_price=old_base_price,
             client_price=client_price,
+            profit=profit_label,
         ),
         reply_markup=tariffs_keyboard(
             tariffs,
@@ -878,17 +918,41 @@ async def renew_same_tariff(call: CallbackQuery, state: FSMContext) -> None:
         await call.answer()
         return
 
-    await state.set_state(RenewState.waiting_amount)
-    await _process_renewal(
-        bot=call.bot,
-        chat_id=call.message.chat.id,
-        user_id=call.from_user.id,
-        full_name=call.from_user.full_name,
-        username=call.from_user.username,
-        is_owner=is_owner,
-        is_admin=is_admin,
-        state=state,
+    data = await state.get_data()
+    base_price = data.get("tariff_base_price") or old_base_price
+    amount_total, owner_share, profit, extra_client = _calc_renew_preview(
+        settings,
+        data=data,
         amount_monthly=client_price_value,
+        base_price=base_price,
+    )
+    upgrade_note = ""
+    if extra_client > 0:
+        note = _t(
+            settings.text_renew_upgrade_note,
+            days_left=data.get("renew_days_left") or 0,
+            extra=extra_client,
+        ).strip()
+        if note:
+            upgrade_note = f"\n{note}"
+    await state.update_data(renew_amount_monthly=client_price_value)
+    await state.set_state(RenewState.waiting_confirm)
+    await _edit_or_send(
+        call,
+        _t(
+            settings.text_renew_confirm,
+            username=data.get("username") or "—",
+            tariff=data.get("tariff_name") or old_tariff,
+            base_price=base_price,
+            days=data.get("days") or settings.default_renew_days,
+            amount_monthly=client_price_value,
+            amount_total=amount_total,
+            owner_share=owner_share,
+            profit=profit,
+            upgrade_note=upgrade_note,
+        ),
+        reply_markup=renew_confirm_keyboard(),
+        is_menu=True,
     )
     await call.answer()
 
@@ -936,14 +1000,84 @@ async def renew_amount(message: Message, state: FSMContext) -> None:
         )
         return
 
-    await _process_renewal(
+    data = await state.get_data()
+    base_price = data.get("tariff_base_price") or settings.base_subscription_price
+    amount_total, owner_share, profit, extra_client = _calc_renew_preview(
+        settings,
+        data=data,
+        amount_monthly=amount,
+        base_price=base_price,
+    )
+    upgrade_note = ""
+    if extra_client > 0:
+        note = _t(
+            settings.text_renew_upgrade_note,
+            days_left=data.get("renew_days_left") or 0,
+            extra=extra_client,
+        ).strip()
+        if note:
+            upgrade_note = f"\n{note}"
+    await state.update_data(renew_amount_monthly=amount)
+    await state.set_state(RenewState.waiting_confirm)
+    await _render_menu_text(
         bot=message.bot,
         chat_id=message.chat.id,
         user_id=message.from_user.id,
-        full_name=message.from_user.full_name,
-        username=message.from_user.username,
-        is_owner=message.from_user.id == settings.owner_telegram_id,
-        is_admin=message.from_user.id in settings.admin_id_set,
-        state=state,
-        amount_monthly=amount,
+        name=message.from_user.full_name,
+        text=_t(
+            settings.text_renew_confirm,
+            username=data.get("username") or "—",
+            tariff=data.get("tariff_name") or _t(settings.text_client_tariff_default),
+            base_price=base_price,
+            days=data.get("days") or settings.default_renew_days,
+            amount_monthly=amount,
+            amount_total=amount_total,
+            owner_share=owner_share,
+            profit=profit,
+            upgrade_note=upgrade_note,
+        ),
+        reply_markup=renew_confirm_keyboard(),
+        force_new=True,
     )
+
+
+@router.callback_query(lambda call: call.data == "renew:confirm")
+async def renew_confirm(call: CallbackQuery, state: FSMContext) -> None:
+    if not await _is_agent_allowed(call.from_user.id):
+        await call.answer(_t(get_settings().text_no_access_alert), show_alert=True)
+        return
+    data = await state.get_data()
+    amount_monthly = data.get("renew_amount_monthly")
+    if not amount_monthly:
+        await call.answer(_t(get_settings().text_amount_invalid), show_alert=True)
+        return
+    await _process_renewal(
+        bot=call.bot,
+        chat_id=call.message.chat.id,
+        user_id=call.from_user.id,
+        full_name=call.from_user.full_name,
+        username=call.from_user.username,
+        is_owner=call.from_user.id == get_settings().owner_telegram_id,
+        is_admin=call.from_user.id in get_settings().admin_id_set,
+        state=state,
+        amount_monthly=int(amount_monthly),
+    )
+    await call.answer()
+
+
+@router.callback_query(lambda call: call.data == "renew:confirm:back")
+async def renew_confirm_back(call: CallbackQuery, state: FSMContext) -> None:
+    if not await _is_agent_allowed(call.from_user.id):
+        await call.answer(_t(get_settings().text_no_access_alert), show_alert=True)
+        return
+    settings = get_settings()
+    data = await state.get_data()
+    prompt_text = data.get("renew_amount_prompt") or _t(settings.text_renew_amount_prompt)
+    await state.set_state(RenewState.waiting_amount)
+    await _edit_or_send(
+        call,
+        prompt_text,
+        reply_markup=cancel_keyboard(),
+        is_menu=True,
+    )
+    await call.answer()

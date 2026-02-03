@@ -125,7 +125,8 @@ class Settings(BaseSettings):
     text_renew_tariff_pick_prompt: str = (
         "📦 <b>Выбери тариф</b>\\n\\n"
         "Текущий тариф: <b>{old_tariff}</b> ({old_base_price} ₽)\\n"
-        "Цена клиента: <b>{client_price}</b>\\n\\n"
+        "Цена клиента: <b>{client_price}</b>\\n"
+        "Доход агента: <b>{profit}</b>\\n\\n"
         "<i>От тарифа зависит цена для владельца</i>"
     )
     text_renew_client_card: str = (
@@ -156,8 +157,20 @@ class Settings(BaseSettings):
         "✅ <b>Тариф:</b> {name}\\n\\n"
         "💰 Цена владельцу: <b>{price} ₽</b>\\n"
         "📶 Трафик: <b>{traffic}</b>\\n"
+        "💎 Доход агента: <b>{profit}</b>\\n"
         "{desc}\\n\\n"
         "{prompt}"
+    )
+    text_renew_confirm: str = (
+        "✅ <b>Подтверждение продления</b>\\n\\n"
+        "👤 Клиент: <b>{username}</b>\\n"
+        "📦 Тариф: <b>{tariff}</b> ({base_price} ₽)\\n"
+        "📅 Срок: <b>{days} дн.</b>\\n"
+        "💵 Цена клиента: <b>{amount_monthly} ₽/мес</b>\\n"
+        "💰 Сумма клиента: <b>{amount_total} ₽</b>\\n"
+        "🏦 К оплате владельцу: <b>{owner_share} ₽</b>\\n"
+        "💎 Доход агента: <b>{profit} ₽</b>"
+        "{upgrade_note}"
     )
     text_days_invalid: str = "❌ Введи число дней"
     text_days_positive: str = "❌ Дней должно быть больше нуля"
@@ -325,6 +338,8 @@ class Settings(BaseSettings):
     btn_renew_180_days: str = "180 дней"
     btn_renew_365_days: str = "365 дней"
     btn_renew_same: str = "✅ Продлить как есть"
+    btn_renew_confirm: str = "✅ Подтвердить"
+    btn_renew_edit_amount: str = "← Изменить цену"
     btn_back: str = "← Назад"
     btn_cancel: str = "✕ Отмена"
     btn_back_to_menu: str = "← Меню"

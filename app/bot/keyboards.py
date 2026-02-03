@@ -94,6 +94,17 @@ def renew_days_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+def renew_confirm_keyboard() -> InlineKeyboardMarkup:
+    settings = get_settings()
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=_t(settings.btn_renew_confirm), callback_data="renew:confirm")],
+            [InlineKeyboardButton(text=_t(settings.btn_renew_edit_amount), callback_data="renew:confirm:back")],
+            [InlineKeyboardButton(text=_t(settings.btn_cancel), callback_data="cancel")],
+        ]
+    )
+
+
 def cancel_keyboard() -> InlineKeyboardMarkup:
     settings = get_settings()
     return InlineKeyboardMarkup(

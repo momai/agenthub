@@ -10,6 +10,8 @@ from app.bot.keyboards import (
     cancel_keyboard,
     clients_list_pagination_keyboard,
     clients_keyboard,
+    new_client_confirm_keyboard,
+    new_client_days_keyboard,
     skip_keyboard,
     tariff_actions_keyboard,
     tariffs_keyboard,
@@ -33,6 +35,7 @@ from app.services.remnawave_service import create_user_only, username_exists
 from .common import (
     _agent_display,
     USERNAME_PATTERN,
+    _calc_amount_by_days,
     _calc_base_debt,
     _credit_limit_exceeded,
     _format_traffic,
@@ -180,79 +183,68 @@ async def new_client_username(message: Message, state: FSMContext) -> None:
         return
 
     await state.update_data(username=username)
-    await state.set_state(NewClientState.waiting_tg_id)
+    await state.set_state(NewClientState.waiting_days)
     await _render_menu_text(
         bot=message.bot,
         chat_id=message.chat.id,
         user_id=message.from_user.id,
         name=message.from_user.full_name,
-        text=_t(get_settings().text_new_client_tg_id_prompt),
-        reply_markup=skip_keyboard("tg"),
+        text=_t(get_settings().text_new_client_days_prompt),
+        reply_markup=new_client_days_keyboard(),
         force_new=True,
     )
 
 
-@router.message(NewClientState.waiting_tg_id)
-async def new_client_tg_id(message: Message, state: FSMContext) -> None:
-    if not await _is_agent_allowed(message.from_user.id):
-        await message.answer(_t(get_settings().text_no_access_message))
-        await state.clear()
+@router.callback_query(lambda call: call.data == "client:new:back")
+async def new_client_days_back(call: CallbackQuery, state: FSMContext) -> None:
+    if not await _is_agent_allowed(call.from_user.id):
+        await call.answer(_t(get_settings().text_no_access_alert), show_alert=True)
         return
-    if _is_start(message.text):
-        await state.clear()
-        await _show_start_menu(message)
-        return
-    if _is_cancel(message.text):
-        await state.clear()
-        await _show_start_menu(message)
-        return
-
-    telegram_id: int | None = None
-    if _is_skip(message.text):
-        telegram_id = None
-    else:
-        try:
-            telegram_id = int((message.text or "").strip())
-        except (ValueError, AttributeError):
-            await _render_error_prompt(
-                bot=message.bot,
-                chat_id=message.chat.id,
-                user_id=message.from_user.id,
-                name=message.from_user.full_name,
-                error_text=_t(get_settings().text_tg_id_invalid),
-                prompt_text=_t(get_settings().text_new_client_tg_id_prompt),
-                reply_markup=skip_keyboard("tg"),
-            )
-            return
-
-    await state.update_data(telegram_id=telegram_id)
     settings = get_settings()
-    is_owner = message.from_user.id == settings.owner_telegram_id
-    is_admin = message.from_user.id in settings.admin_id_set
-    tariffs = _tariffs_for_user(settings, message.from_user.id, show_all=is_owner or is_admin)
+    await state.set_state(NewClientState.waiting_username)
+    await _edit_or_send(
+        call,
+        _t(settings.text_new_client_username_prompt),
+        reply_markup=cancel_keyboard(),
+        is_menu=True,
+    )
+    await call.answer()
+
+
+@router.callback_query(lambda call: call.data.startswith("client:new:days:"))
+async def new_client_pick_days(call: CallbackQuery, state: FSMContext) -> None:
+    if not await _is_agent_allowed(call.from_user.id):
+        await call.answer(_t(get_settings().text_no_access_alert), show_alert=True)
+        return
+    try:
+        days = int(call.data.split(":")[-1])
+    except ValueError:
+        await call.answer(_t(get_settings().text_page_invalid), show_alert=True)
+        return
+    await state.update_data(days=days, telegram_id=None)
+    settings = get_settings()
+    is_owner = call.from_user.id == settings.owner_telegram_id
+    is_admin = call.from_user.id in settings.admin_id_set
+    tariffs = _tariffs_for_user(settings, call.from_user.id, show_all=is_owner or is_admin)
     if not tariffs:
-        await _render_menu_text(
-            bot=message.bot,
-            chat_id=message.chat.id,
-            user_id=message.from_user.id,
-            name=message.from_user.full_name,
+        await _edit_or_send(
+            call,
             text=f"{_t(settings.text_tariffs_empty)}\n\n{_t(settings.text_new_client_price_prompt)}",
             reply_markup=cancel_keyboard(),
-            force_new=True,
+            is_menu=True,
         )
         await state.update_data(tariff_base_price=settings.base_subscription_price, tariff_remnawave={})
         await state.set_state(NewClientState.waiting_price)
+        await call.answer()
         return
     await state.set_state(NewClientState.waiting_tariff)
-    await _render_menu_text(
-        bot=message.bot,
-        chat_id=message.chat.id,
-        user_id=message.from_user.id,
-        name=message.from_user.full_name,
+    await _edit_or_send(
+        call,
         text=_t(settings.text_tariff_pick_prompt),
         reply_markup=tariffs_keyboard(tariffs, label_mode="price"),
-        force_new=True,
+        is_menu=True,
     )
+    await call.answer()
 
 
 @router.callback_query(lambda call: call.data == "skip:tg")
@@ -488,23 +480,79 @@ async def new_client_price(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     username = data.get("username")
     telegram_id = data.get("telegram_id")
+    days = data.get("days") or get_settings().default_renew_days
     settings = get_settings()
     base_price = data.get("tariff_base_price") or settings.base_subscription_price
     tariff_name = data.get("tariff_name")
     tariff_remnawave = data.get("tariff_remnawave") or {}
 
+    amount_total = _calc_amount_by_days(settings, price, days)
+    owner_share = _calc_base_debt(settings, days, base_price)
+    profit = amount_total - owner_share
+    await state.update_data(new_client_amount_monthly=price)
+    await state.set_state(NewClientState.waiting_confirm)
+    await _render_menu_text(
+        bot=message.bot,
+        chat_id=message.chat.id,
+        user_id=message.from_user.id,
+        name=message.from_user.full_name,
+        text=_t(
+            settings.text_new_client_confirm,
+            username=username,
+            tariff=tariff_name or _t(settings.text_client_tariff_default),
+            base_price=base_price,
+            days=days,
+            amount_monthly=price,
+            amount_total=amount_total,
+            owner_share=owner_share,
+            profit=profit,
+        ),
+        reply_markup=new_client_confirm_keyboard(),
+        force_new=True,
+    )
+    return
+
+
+@router.callback_query(lambda call: call.data == "client:new:confirm")
+async def new_client_confirm(call: CallbackQuery, state: FSMContext) -> None:
+    if not await _is_agent_allowed(call.from_user.id):
+        await call.answer(_t(get_settings().text_no_access_alert), show_alert=True)
+        return
+    data = await state.get_data()
+    amount_monthly = data.get("new_client_amount_monthly")
+    if not amount_monthly:
+        await call.answer(_t(get_settings().text_amount_invalid), show_alert=True)
+        return
     await _create_client_in_remnawave(
-        actor_id=message.from_user.id,
-        actor_name=message.from_user.full_name,
-        message=message,
-        username=username,
-        telegram_id=telegram_id,
-        monthly_price=price,
-        base_price=base_price,
-        tariff_name=tariff_name,
-        tariff_remnawave=tariff_remnawave,
+        actor_id=call.from_user.id,
+        actor_name=call.from_user.full_name,
+        message=call.message,
+        username=data.get("username"),
+        telegram_id=data.get("telegram_id"),
+        days=data.get("days") or get_settings().default_renew_days,
+        monthly_price=int(amount_monthly),
+        base_price=data.get("tariff_base_price"),
+        tariff_name=data.get("tariff_name"),
+        tariff_remnawave=data.get("tariff_remnawave") or {},
     )
     await state.clear()
+    await call.answer()
+
+
+@router.callback_query(lambda call: call.data == "client:new:confirm:back")
+async def new_client_confirm_back(call: CallbackQuery, state: FSMContext) -> None:
+    if not await _is_agent_allowed(call.from_user.id):
+        await call.answer(_t(get_settings().text_no_access_alert), show_alert=True)
+        return
+    settings = get_settings()
+    await state.set_state(NewClientState.waiting_price)
+    await _edit_or_send(
+        call,
+        _t(settings.text_new_client_price_prompt),
+        reply_markup=cancel_keyboard(),
+        is_menu=True,
+    )
+    await call.answer()
 
 
 @router.callback_query(lambda call: call.data == "client:list")
@@ -537,6 +585,7 @@ async def _create_client_in_remnawave(
     message: Message,
     username: str,
     telegram_id: int | None,
+    days: int,
     monthly_price: int,
     base_price: int | None = None,
     tariff_name: str | None = None,
@@ -556,8 +605,10 @@ async def _create_client_in_remnawave(
             return
         settings = get_settings()
         base_price = base_price or settings.base_subscription_price
+        days = int(days) if days and int(days) > 0 else settings.default_renew_days
         tariff_name = tariff_name or _t(settings.text_client_tariff_default)
-        projected = agent.current_debt + base_price
+        owner_share = _calc_base_debt(settings, days, base_price)
+        projected = agent.current_debt + owner_share
         if agent.credit_limit > 0 and projected > agent.credit_limit:
             await _show_status_then_menu(
                 bot=message.bot,
@@ -573,12 +624,13 @@ async def _create_client_in_remnawave(
             )
             return
         logging.info(
-            "Create client: actor_id=%s agent_id=%s username=%s telegram_id=%s price=%s",
+            "Create client: actor_id=%s agent_id=%s username=%s telegram_id=%s price=%s days=%s",
             actor_id,
             agent.id,
             username,
             telegram_id,
             monthly_price,
+            days,
         )
         existing = await get_client_by_username(session, agent.id, username)
         if existing:
@@ -596,7 +648,7 @@ async def _create_client_in_remnawave(
         try:
             result = await create_user_only(
                 username=username,
-                days=settings.default_renew_days,
+                days=days,
                 description=f"agent:{agent.telegram_id}",
                 telegram_id=telegram_id,
                 overrides=(tariff_remnawave or {}),
@@ -625,6 +677,7 @@ async def _create_client_in_remnawave(
 
         expires_at = result.get("expires_at")
         subscription_link = result.get("subscription_url")
+        amount_total = _calc_amount_by_days(settings, monthly_price, days)
         await create_client(
             session,
             agent_id=agent.id,
@@ -633,7 +686,7 @@ async def _create_client_in_remnawave(
             expires_at=expires_at,
             subscription_link=subscription_link,
             monthly_price=monthly_price,
-            last_payment_amount=monthly_price,
+            last_payment_amount=amount_total,
             last_payment_at=datetime.utcnow(),
             tariff_name=tariff_name,
             tariff_base_price=base_price,
@@ -643,8 +696,8 @@ async def _create_client_in_remnawave(
             agent.id,
             username,
         )
-        await increase_debt(session, agent, base_price, f"Создание клиента {username}")
-        profit = monthly_price - base_price
+        await increase_debt(session, agent, owner_share, f"Создание клиента {username}")
+        profit = amount_total - owner_share
         await _show_status_then_menu(
             bot=message.bot,
             chat_id=message.chat.id,
@@ -654,10 +707,10 @@ async def _create_client_in_remnawave(
             status_text=_t(
                 settings.text_create_success,
                 username=username,
-                days=settings.default_renew_days,
+                days=days,
                 profit=profit,
-                amount=monthly_price,
-                base_price=base_price,
+                amount=amount_total,
+                base_price=owner_share,
                 payable=agent.current_debt,
             ),
             extra_text=(

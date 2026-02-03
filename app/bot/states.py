@@ -3,9 +3,10 @@ from aiogram.fsm.state import State, StatesGroup
 
 class NewClientState(StatesGroup):
     waiting_username = State()
-    waiting_tg_id = State()
+    waiting_days = State()
     waiting_tariff = State()
     waiting_price = State()
+    waiting_confirm = State()
 
 
 class RenewState(StatesGroup):

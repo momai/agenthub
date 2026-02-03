@@ -101,10 +101,20 @@ class Settings(BaseSettings):
     text_new_client_username_prompt: str = "📝 <b>Username клиента</b>\\n\\n<i>Латиница, цифры, _ или -\\nОт 3 до 36 символов</i>"
     text_username_invalid: str = "❌ Неверный формат\\n\\n<i>Допустимо: латиница, цифры, _ или -\\nПример:</i> <code>ivan_2024</code>"
     text_username_invalid_short: str = "❌ Неверный формат username"
-    text_new_client_tg_id_prompt: str = "📱 <b>Telegram ID клиента</b>\\n\\n<i>Если не знаешь — пропусти</i>"
+    text_new_client_days_prompt: str = "📅 <b>Срок подписки</b>\\n\\n<i>Выбери срок кнопками ниже</i>"
     text_tg_id_invalid: str = "❌ Это должно быть число"
     text_tg_id_invalid_short: str = "❌ ID должен быть числом"
     text_new_client_price_prompt: str = "💵 <b>Цена подписки</b>\\n\\n<i>Сколько берёшь с клиента за месяц?</i>"
+    text_new_client_confirm: str = (
+        "✅ <b>Подтверждение подключения</b>\\n\\n"
+        "👤 Клиент: <b>{username}</b>\\n"
+        "📦 Тариф: <b>{tariff}</b> ({base_price} ₽)\\n"
+        "📅 Срок: <b>{days} дн.</b>\\n"
+        "💵 Цена клиента: <b>{amount_monthly} ₽/мес</b>\\n"
+        "💰 Сумма клиента: <b>{amount_total} ₽</b>\\n"
+        "🏦 К оплате владельцу: <b>{owner_share} ₽</b>\\n"
+        "💎 Доход агента: <b>{profit} ₽</b>"
+    )
 
     # ─── Валидация сумм ───────────────────────────────────────────
     text_amount_invalid_example: str = "❌ Введи число, например <code>300</code>"
@@ -282,8 +292,17 @@ class Settings(BaseSettings):
     text_owner_sync_start: str = "🔄 Синхронизация..."
     text_owner_sync_done: str = "✅ <b>Синхронизация завершена</b>\\n\\nУдалено: {removed}\\nОбновлено: {updated}"
     text_owner_report_no_agents: str = "📭 Агентов пока нет"
-    text_owner_report_header: str = "📊 <b>Отчёт по агентам</b>\\n"
-    text_owner_report_line: str = "{status} <b>{name}</b>\\n  💰 {payable} ₽ · лимит {limit} · клиентов {clients}"
+    text_owner_report_header: str = "📊 <b>Отчёт по агентам</b>"
+    text_owner_report_summary: str = (
+        "Всего: <b>{agents}</b> · активных: <b>{active}</b> · клиентов: <b>{clients}</b>\\n"
+        "К оплате: <b>{debt} ₽</b> · лимит: <b>{limit}</b>\\n"
+    )
+    text_owner_report_line: str = (
+        "{status} <b>{name}</b>\\n"
+        "  💳 К оплате: <b>{payable} ₽</b>\\n"
+        "  🧾 Лимит: <b>{limit}</b> · 👥 Клиентов: <b>{clients}</b>\\n"
+        "  🆔 {id}"
+    )
 
     # ─── Общие ────────────────────────────────────────────────────
     text_cancelled: str = "👌 Отменено"
@@ -340,6 +359,8 @@ class Settings(BaseSettings):
     btn_renew_same: str = "✅ Продлить как есть"
     btn_renew_confirm: str = "✅ Подтвердить"
     btn_renew_edit_amount: str = "← Изменить цену"
+    btn_new_client_confirm: str = "✅ Подтвердить"
+    btn_new_client_edit_amount: str = "← Изменить цену"
     btn_back: str = "← Назад"
     btn_cancel: str = "✕ Отмена"
     btn_back_to_menu: str = "← Меню"

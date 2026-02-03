@@ -16,6 +16,7 @@ from app.bot.keyboards import (
     delete_agents_keyboard,
     delete_agents_pagination_keyboard,
     main_menu,
+    owner_report_pagination_keyboard,
     owner_agents_menu,
 )
 from app.bot.states import AddAgentState, DeleteClientState, LimitAgentState
@@ -467,19 +468,68 @@ async def owner_report(call: CallbackQuery) -> None:
     if not _is_owner_or_admin(call.from_user.id):
         await call.answer(_t(settings.text_no_access_alert), show_alert=True)
         return
+    await _render_owner_report(call, page=1)
+    await call.answer()
+
+
+@router.callback_query(lambda call: call.data.startswith("owner:report:page:"))
+async def owner_report_page(call: CallbackQuery) -> None:
+    settings = get_settings()
+    if not _is_owner_or_admin(call.from_user.id):
+        await call.answer(_t(settings.text_no_access_alert), show_alert=True)
+        return
+    try:
+        page = int(call.data.split(":")[-1])
+    except ValueError:
+        await call.answer(_t(settings.text_page_invalid), show_alert=True)
+        return
+    await _render_owner_report(call, page=page)
+    await call.answer()
+
+
+async def _render_owner_report(call: CallbackQuery, page: int) -> None:
+    settings = get_settings()
     async with SessionLocal() as session:
         agents_with_counts = await list_agents(session)
 
     if not agents_with_counts:
         await _edit_or_send(call, _t(settings.text_owner_report_no_agents), reply_markup=owner_agents_menu(), is_menu=True)
-        await call.answer()
         return
 
-    lines = [_t(settings.text_owner_report_header)]
-    for agent, client_count in agents_with_counts:
+    total_agents = len(agents_with_counts)
+    total_active = sum(1 for agent, _ in agents_with_counts if agent.is_active)
+    total_clients = sum(count for _, count in agents_with_counts)
+    total_debt = sum(agent.current_debt for agent, _ in agents_with_counts)
+    limit_sum = sum(agent.credit_limit for agent, _ in agents_with_counts if agent.credit_limit > 0)
+    limit_infinite = sum(1 for agent, _ in agents_with_counts if agent.credit_limit <= 0)
+    if limit_infinite and limit_sum:
+        limit_total = f"∞ + {limit_sum} ₽"
+    elif limit_infinite:
+        limit_total = _t(settings.text_limit_infinite)
+    else:
+        limit_total = f"{limit_sum} ₽"
+
+    page_size = 6
+    total_pages = max(1, math.ceil(len(agents_with_counts) / page_size))
+    page = max(1, min(page, total_pages))
+    start = (page - 1) * page_size
+    end = start + page_size
+    page_rows = agents_with_counts[start:end]
+
+    header = _t(settings.text_owner_report_header)
+    summary = _t(
+        settings.text_owner_report_summary,
+        agents=total_agents,
+        active=total_active,
+        clients=total_clients,
+        debt=total_debt,
+        limit=limit_total,
+    )
+    cards = []
+    for agent, client_count in page_rows:
         status = "✅" if agent.is_active else "🚫"
         limit = _t(settings.text_limit_infinite) if agent.credit_limit <= 0 else f"{agent.credit_limit} ₽"
-        lines.append(
+        cards.append(
             _t(
                 settings.text_owner_report_line,
                 status=status,
@@ -490,8 +540,13 @@ async def owner_report(call: CallbackQuery) -> None:
                 clients=client_count,
             )
         )
-    await _edit_or_send(call, "\n".join(lines), reply_markup=owner_agents_menu(), is_menu=True)
-    await call.answer()
+    text = "\n\n".join([part for part in [header, summary, *cards] if part.strip()])
+    await _edit_or_send(
+        call,
+        text,
+        reply_markup=owner_report_pagination_keyboard(page, total_pages),
+        is_menu=True,
+    )
 
 
 @router.callback_query(lambda call: call.data == "owner:delete:client")

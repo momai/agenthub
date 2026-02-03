@@ -94,12 +94,45 @@ def renew_days_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+def new_client_days_keyboard() -> InlineKeyboardMarkup:
+    settings = get_settings()
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text=_t(settings.btn_renew_default_days), callback_data="client:new:days:30"),
+                InlineKeyboardButton(text=_t(settings.btn_renew_90_days), callback_data="client:new:days:90"),
+            ],
+            [
+                InlineKeyboardButton(text=_t(settings.btn_renew_180_days), callback_data="client:new:days:180"),
+                InlineKeyboardButton(text=_t(settings.btn_renew_365_days), callback_data="client:new:days:365"),
+            ],
+            [InlineKeyboardButton(text=_t(settings.btn_back), callback_data="client:new:back")],
+            [InlineKeyboardButton(text=_t(settings.btn_cancel), callback_data="cancel")],
+        ]
+    )
+
+
 def renew_confirm_keyboard() -> InlineKeyboardMarkup:
     settings = get_settings()
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text=_t(settings.btn_renew_confirm), callback_data="renew:confirm")],
             [InlineKeyboardButton(text=_t(settings.btn_renew_edit_amount), callback_data="renew:confirm:back")],
+            [InlineKeyboardButton(text=_t(settings.btn_cancel), callback_data="cancel")],
+        ]
+    )
+
+
+def new_client_confirm_keyboard() -> InlineKeyboardMarkup:
+    settings = get_settings()
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=_t(settings.btn_new_client_confirm), callback_data="client:new:confirm")],
+            [
+                InlineKeyboardButton(
+                    text=_t(settings.btn_new_client_edit_amount), callback_data="client:new:confirm:back"
+                )
+            ],
             [InlineKeyboardButton(text=_t(settings.btn_cancel), callback_data="cancel")],
         ]
     )
@@ -219,6 +252,20 @@ def agents_limit_keyboard(agent_rows: list[tuple[int, str, str]]) -> InlineKeybo
                 )
             ]
         )
+    rows.append([InlineKeyboardButton(text=_t(settings.btn_owner_back), callback_data="owner:agents")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def owner_report_pagination_keyboard(page: int, total_pages: int) -> InlineKeyboardMarkup:
+    settings = get_settings()
+    rows = []
+    nav = []
+    if page > 1:
+        nav.append(InlineKeyboardButton(text=_t(settings.btn_prev), callback_data=f"owner:report:page:{page - 1}"))
+    if page < total_pages:
+        nav.append(InlineKeyboardButton(text=_t(settings.btn_next), callback_data=f"owner:report:page:{page + 1}"))
+    if nav:
+        rows.append(nav)
     rows.append([InlineKeyboardButton(text=_t(settings.btn_owner_back), callback_data="owner:agents")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 

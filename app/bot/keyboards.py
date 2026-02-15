@@ -61,7 +61,10 @@ def owner_agents_menu() -> InlineKeyboardMarkup:
                 ),
             ],
             # Служебное
-            [InlineKeyboardButton(text=_t(settings.btn_owner_sync), callback_data="owner:sync")],
+            [
+                InlineKeyboardButton(text=_t(settings.btn_owner_sync), callback_data="owner:sync"),
+                InlineKeyboardButton(text=_t(settings.btn_owner_refresh_agents), callback_data="owner:refresh_agents"),
+            ],
             [InlineKeyboardButton(text=_t(settings.btn_owner_back), callback_data="owner:back")],
         ]
     )
@@ -224,6 +227,28 @@ def tariff_actions_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text=_t(settings.btn_cancel), callback_data="cancel")],
         ]
     )
+
+
+def amount_presets_keyboard(
+    prefix: str,
+    amounts: list[int],
+    back_callback: str = "tariff:back",
+) -> InlineKeyboardMarkup:
+    settings = get_settings()
+    rows = []
+    for i in range(0, len(amounts), 2):
+        row = []
+        for value in amounts[i : i + 2]:
+            row.append(
+                InlineKeyboardButton(
+                    text=f"{value} ₽",
+                    callback_data=f"{prefix}:{value}",
+                )
+            )
+        rows.append(row)
+    rows.append([InlineKeyboardButton(text=_t(settings.btn_tariff_back), callback_data=back_callback)])
+    rows.append([InlineKeyboardButton(text=_t(settings.btn_cancel), callback_data="cancel")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def clients_list_pagination_keyboard(page: int, total_pages: int) -> InlineKeyboardMarkup:

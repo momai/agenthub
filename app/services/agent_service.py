@@ -11,15 +11,23 @@ async def get_or_create_agent(
     session: AsyncSession, telegram_id: int, name: str, username: str | None = None
 ) -> Agent:
     normalized_username = (username or "").lstrip("@").strip().lower() or None
+    settings = get_settings()
+    bot_id_str = (settings.bot_token or "").split(":", 1)[0]
+    bot_id = int(bot_id_str) if bot_id_str.isdigit() else None
+    # Защита от случайной перезаписи username агента username самого бота.
+    if bot_id and telegram_id != bot_id and normalized_username and normalized_username.endswith("bot"):
+        normalized_username = None
     result = await session.execute(select(Agent).where(Agent.telegram_id == telegram_id))
     agent = result.scalar_one_or_none()
     if agent:
+        normalized_name = (name or "").strip()
+        if normalized_name and agent.name != normalized_name:
+            agent.name = normalized_name
         if normalized_username and agent.telegram_username != normalized_username:
             agent.telegram_username = normalized_username
             await session.commit()
         return agent
 
-    settings = get_settings()
     agent = Agent(
         telegram_id=telegram_id,
         name=name or str(telegram_id),

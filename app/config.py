@@ -120,6 +120,7 @@ class Settings(BaseSettings):
     text_amount_invalid_example: str = "❌ Введи число, например <code>300</code>"
     text_amount_invalid: str = "❌ Введи число"
     text_amount_positive: str = "❌ Сумма должна быть больше нуля"
+    text_amount_choose_hint: str = "⬇️ Выбери сумму или введи свою в чат"
 
     # ─── Клиенты ──────────────────────────────────────────────────
     text_clients_none: str = "📭 Клиентов пока нет"
@@ -291,6 +292,8 @@ class Settings(BaseSettings):
     text_owner_limit_done: str = "✅ Лимит: <b>{agent_name}</b> → {limit}"
     text_owner_sync_start: str = "🔄 Синхронизация..."
     text_owner_sync_done: str = "✅ <b>Синхронизация завершена</b>\\n\\nУдалено: {removed}\\nОбновлено: {updated}"
+    text_owner_refresh_agents_start: str = "🧹 Обновляю профили агентов..."
+    text_owner_refresh_agents_done: str = "✅ Профили агентов обновлены: <b>{updated}</b> из <b>{total}</b>"
     text_owner_report_no_agents: str = "📭 Агентов пока нет"
     text_owner_report_header: str = "📊 <b>Отчёт по агентам</b>"
     text_owner_report_summary: str = (
@@ -346,6 +349,7 @@ class Settings(BaseSettings):
     btn_owner_limit: str = "💳 Лимиты агентов"
     btn_owner_report: str = "📊 Отчёт по агентам"
     btn_owner_sync: str = "🔄 Синхронизация"
+    btn_owner_refresh_agents: str = "🧹 Обновить профили"
     btn_owner_notify_preview: str = "👀 Кто получит уведомления"
     btn_owner_notify_send: str = "📨 Отправить уведомления"
     btn_owner_delete_client: str = "🗑️ Удалить клиента"
@@ -361,6 +365,7 @@ class Settings(BaseSettings):
     btn_renew_edit_amount: str = "← Изменить цену"
     btn_new_client_confirm: str = "✅ Подтвердить"
     btn_new_client_edit_amount: str = "← Изменить цену"
+    btn_amount_custom: str = "✍️ Своя сумма"
     btn_back: str = "← Назад"
     btn_cancel: str = "✕ Отмена"
     btn_back_to_menu: str = "← Меню"

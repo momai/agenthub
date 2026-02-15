@@ -10,7 +10,7 @@ from app.config import get_settings
 from app.db.session import SessionLocal
 from app.services.agent_service import get_agent_by_telegram_id, get_or_create_agent
 
-from .common import _format_tariffs_block, _t
+from .common import _format_tariffs_block, _is_agent_allowed, _t
 
 
 router = Router()
@@ -18,9 +18,29 @@ router = Router()
 _LAST_MENU_MESSAGE_ID: dict[int, int] = {}
 
 
+async def _ensure_access(call: CallbackQuery) -> bool:
+    settings = get_settings()
+    if call.from_user.id == settings.owner_telegram_id or call.from_user.id in settings.admin_id_set:
+        return True
+    if await _is_agent_allowed(call.from_user.id):
+        return True
+    await call.answer(_t(settings.text_no_access_alert), show_alert=True)
+    try:
+        await call.message.delete()
+    except Exception:
+        pass
+    return False
+
+
 async def _store_menu_message_id(user_id: int, name: str, message_id: int | None) -> None:
     async with SessionLocal() as session:
-        agent = await get_or_create_agent(session, user_id, name)
+        settings = get_settings()
+        if user_id == settings.owner_telegram_id or user_id in settings.admin_id_set:
+            agent = await get_or_create_agent(session, user_id, name)
+        else:
+            agent = await get_agent_by_telegram_id(session, user_id)
+        if not agent:
+            return
         agent.menu_message_id = message_id
         await session.commit()
 
@@ -29,8 +49,9 @@ async def _delete_menu(bot, chat_id: int, user_id: int, name: str) -> None:
     message_id = _LAST_MENU_MESSAGE_ID.get(user_id)
     if not message_id:
         async with SessionLocal() as session:
-            agent = await get_or_create_agent(session, user_id, name)
-            message_id = agent.menu_message_id
+            agent = await get_agent_by_telegram_id(session, user_id)
+            if agent:
+                message_id = agent.menu_message_id
     if message_id:
         try:
             await bot.delete_message(chat_id=chat_id, message_id=message_id)
@@ -67,8 +88,13 @@ async def _edit_menu_for_user(
     message_id = _LAST_MENU_MESSAGE_ID.get(user_id)
     if not message_id:
         async with SessionLocal() as session:
-            agent = await get_or_create_agent(session, user_id, name)
-            message_id = agent.menu_message_id
+            settings = get_settings()
+            if user_id == settings.owner_telegram_id or user_id in settings.admin_id_set:
+                agent = await get_or_create_agent(session, user_id, name)
+            else:
+                agent = await get_agent_by_telegram_id(session, user_id)
+            if agent:
+                message_id = agent.menu_message_id
     if message_id:
         try:
             await bot.edit_message_text(
@@ -140,8 +166,13 @@ async def _render_menu(
     message_id = _LAST_MENU_MESSAGE_ID.get(user_id)
     if not message_id:
         async with SessionLocal() as session:
-            agent = await get_or_create_agent(session, user_id, name)
-            message_id = agent.menu_message_id
+            settings = get_settings()
+            if user_id == settings.owner_telegram_id or user_id in settings.admin_id_set:
+                agent = await get_or_create_agent(session, user_id, name)
+            else:
+                agent = await get_agent_by_telegram_id(session, user_id)
+            if agent:
+                message_id = agent.menu_message_id
     if message_id and not force_new:
         try:
             await bot.edit_message_text(
@@ -189,7 +220,9 @@ async def _show_status_then_menu(
 
 async def _get_balance(user_id: int, name: str) -> tuple[int, int]:
     async with SessionLocal() as session:
-        agent = await get_or_create_agent(session, user_id, name)
+        agent = await get_agent_by_telegram_id(session, user_id)
+        if not agent:
+            return 0, 0
         return agent.current_debt, agent.credit_limit
 
 
@@ -259,6 +292,8 @@ async def ping(message: Message) -> None:
 @router.callback_query(lambda call: call.data == "cancel")
 async def cancel_callback(call: CallbackQuery, state: FSMContext) -> None:
     settings = get_settings()
+    if not await _ensure_access(call):
+        return
     await state.clear()
     await _render_menu(
         bot=call.bot,
@@ -275,6 +310,8 @@ async def cancel_callback(call: CallbackQuery, state: FSMContext) -> None:
 
 @router.callback_query(lambda call: call.data == "menu")
 async def menu_callback(call: CallbackQuery, state: FSMContext) -> None:
+    if not await _ensure_access(call):
+        return
     await state.clear()
     settings = get_settings()
     await _render_menu(
@@ -292,6 +329,8 @@ async def menu_callback(call: CallbackQuery, state: FSMContext) -> None:
 
 @router.callback_query(lambda call: call.data == "vpn:info")
 async def vpn_info(call: CallbackQuery) -> None:
+    if not await _ensure_access(call):
+        return
     settings = get_settings()
     is_owner = call.from_user.id == settings.owner_telegram_id
     is_admin = call.from_user.id in settings.admin_id_set
@@ -319,6 +358,8 @@ async def vpn_info(call: CallbackQuery) -> None:
 
 @router.callback_query(lambda call: call.data == "tariffs:info")
 async def tariffs_info(call: CallbackQuery) -> None:
+    if not await _ensure_access(call):
+        return
     settings = get_settings()
     is_owner = call.from_user.id == settings.owner_telegram_id
     is_admin = call.from_user.id in settings.admin_id_set
@@ -344,6 +385,8 @@ async def tariffs_info(call: CallbackQuery) -> None:
 
 @router.callback_query(lambda call: call.data == "balance:refresh")
 async def balance_refresh(call: CallbackQuery) -> None:
+    if not await _ensure_access(call):
+        return
     settings = get_settings()
     balance, limit = await _get_balance(call.from_user.id, call.from_user.full_name)
     try:

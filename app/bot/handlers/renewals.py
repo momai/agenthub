@@ -7,6 +7,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from app.bot.keyboards import (
+    amount_presets_keyboard,
     back_to_menu_keyboard,
     cancel_keyboard,
     clients_keyboard,
@@ -32,6 +33,7 @@ from app.services.debt_service import increase_debt
 from app.services.remnawave_service import create_or_extend_user
 
 from .common import (
+    _amount_presets,
     _calc_amount_by_days,
     _calc_base_debt,
     _credit_limit_exceeded,
@@ -449,6 +451,7 @@ async def renew_days(message: Message, state: FSMContext) -> None:
             client_price=client_price,
             prompt=amount_prompt,
         )
+        prompt_text = f"{prompt_text}\n\n{_t(settings.text_amount_choose_hint)}"
         await state.update_data(renew_amount_prompt=prompt_text)
         await _render_menu_text(
             bot=message.bot,
@@ -456,7 +459,7 @@ async def renew_days(message: Message, state: FSMContext) -> None:
             user_id=message.from_user.id,
             name=message.from_user.full_name,
             text=f"{_t(settings.text_tariffs_empty)}\n\n{prompt_text}",
-            reply_markup=cancel_keyboard(),
+            reply_markup=amount_presets_keyboard("amount:renew", _amount_presets(settings.base_subscription_price)),
             force_new=True,
         )
         await state.update_data(tariff_base_price=settings.base_subscription_price, tariff_remnawave={})
@@ -526,11 +529,12 @@ async def _renew_select_days(call: CallbackQuery, state: FSMContext, days: int) 
             client_price=client_price,
             prompt=amount_prompt,
         )
+        prompt_text = f"{prompt_text}\n\n{_t(settings.text_amount_choose_hint)}"
         await state.update_data(renew_amount_prompt=prompt_text)
         await _edit_or_send(
             call,
             f"{_t(settings.text_tariffs_empty)}\n\n{prompt_text}",
-            reply_markup=cancel_keyboard(),
+            reply_markup=amount_presets_keyboard("amount:renew", _amount_presets(settings.base_subscription_price)),
             is_menu=True,
         )
         await state.update_data(tariff_base_price=settings.base_subscription_price, tariff_remnawave={})
@@ -907,11 +911,12 @@ async def renew_same_tariff(call: CallbackQuery, state: FSMContext) -> None:
             client_price=client_price,
             prompt=amount_prompt,
         )
-        await state.update_data(renew_amount_prompt=prompt_text)
+        prompt_with_hint = f"{prompt_text}\n\n{_t(settings.text_amount_choose_hint)}"
+        await state.update_data(renew_amount_prompt=prompt_with_hint)
         await _edit_or_send(
             call,
-            prompt_text,
-            reply_markup=cancel_keyboard(),
+            prompt_with_hint,
+            reply_markup=amount_presets_keyboard("amount:renew", _amount_presets(base_price)),
             is_menu=True,
         )
         await state.set_state(RenewState.waiting_amount)
@@ -977,6 +982,8 @@ async def renew_amount(message: Message, state: FSMContext) -> None:
         amount = int((message.text or "").strip())
     except ValueError:
         prompt_text = data.get("renew_amount_prompt") or _t(settings.text_renew_amount_prompt)
+        base_price = data.get("tariff_base_price") or settings.base_subscription_price
+        current_price = data.get("renew_client_price_value") or 0
         await _render_error_prompt(
             bot=message.bot,
             chat_id=message.chat.id,
@@ -984,11 +991,13 @@ async def renew_amount(message: Message, state: FSMContext) -> None:
             name=message.from_user.full_name,
             error_text=_t(get_settings().text_amount_invalid),
             prompt_text=prompt_text,
-            reply_markup=cancel_keyboard(),
+            reply_markup=amount_presets_keyboard("amount:renew", _amount_presets(base_price, current_price)),
         )
         return
     if amount <= 0:
         prompt_text = data.get("renew_amount_prompt") or _t(settings.text_renew_amount_prompt)
+        base_price = data.get("tariff_base_price") or settings.base_subscription_price
+        current_price = data.get("renew_client_price_value") or 0
         await _render_error_prompt(
             bot=message.bot,
             chat_id=message.chat.id,
@@ -996,7 +1005,7 @@ async def renew_amount(message: Message, state: FSMContext) -> None:
             name=message.from_user.full_name,
             error_text=_t(get_settings().text_amount_positive),
             prompt_text=prompt_text,
-            reply_markup=cancel_keyboard(),
+            reply_markup=amount_presets_keyboard("amount:renew", _amount_presets(base_price, current_price)),
         )
         return
 
@@ -1041,6 +1050,61 @@ async def renew_amount(message: Message, state: FSMContext) -> None:
     )
 
 
+@router.callback_query(lambda call: call.data.startswith("amount:renew:"))
+async def renew_amount_preset(call: CallbackQuery, state: FSMContext) -> None:
+    if not await _is_agent_allowed(call.from_user.id):
+        await call.answer(_t(get_settings().text_no_access_alert), show_alert=True)
+        return
+    settings = get_settings()
+    token = call.data.split(":")[-1]
+    try:
+        amount = int(token)
+    except ValueError:
+        await call.answer(_t(settings.text_amount_invalid), show_alert=True)
+        return
+    if amount <= 0:
+        await call.answer(_t(settings.text_amount_positive), show_alert=True)
+        return
+
+    data = await state.get_data()
+    base_price = data.get("tariff_base_price") or settings.base_subscription_price
+    amount_total, owner_share, profit, extra_client = _calc_renew_preview(
+        settings,
+        data=data,
+        amount_monthly=amount,
+        base_price=base_price,
+    )
+    upgrade_note = ""
+    if extra_client > 0:
+        note = _t(
+            settings.text_renew_upgrade_note,
+            days_left=data.get("renew_days_left") or 0,
+            extra=extra_client,
+        ).strip()
+        if note:
+            upgrade_note = f"\n{note}"
+    await state.update_data(renew_amount_monthly=amount)
+    await state.set_state(RenewState.waiting_confirm)
+    await _edit_or_send(
+        call,
+        _t(
+            settings.text_renew_confirm,
+            username=data.get("username") or "—",
+            tariff=data.get("tariff_name") or _t(settings.text_client_tariff_default),
+            base_price=base_price,
+            days=data.get("days") or settings.default_renew_days,
+            amount_monthly=amount,
+            amount_total=amount_total,
+            owner_share=owner_share,
+            profit=profit,
+            upgrade_note=upgrade_note,
+        ),
+        reply_markup=renew_confirm_keyboard(),
+        is_menu=True,
+    )
+    await call.answer()
+
+
 @router.callback_query(lambda call: call.data == "renew:confirm")
 async def renew_confirm(call: CallbackQuery, state: FSMContext) -> None:
     if not await _is_agent_allowed(call.from_user.id):
@@ -1073,11 +1137,13 @@ async def renew_confirm_back(call: CallbackQuery, state: FSMContext) -> None:
     settings = get_settings()
     data = await state.get_data()
     prompt_text = data.get("renew_amount_prompt") or _t(settings.text_renew_amount_prompt)
+    base_price = data.get("tariff_base_price") or settings.base_subscription_price
+    current_price = data.get("renew_client_price_value") or 0
     await state.set_state(RenewState.waiting_amount)
     await _edit_or_send(
         call,
         prompt_text,
-        reply_markup=cancel_keyboard(),
+        reply_markup=amount_presets_keyboard("amount:renew", _amount_presets(base_price, current_price)),
         is_menu=True,
     )
     await call.answer()

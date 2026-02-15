@@ -58,6 +58,16 @@ def _calc_amount_by_days(settings, amount_monthly: int, days: int) -> int:
     return max(1, math.ceil((amount_monthly * days) / settings.default_renew_days))
 
 
+def _amount_presets(base_price: int, current_price: int | None = None) -> list[int]:
+    values: list[int] = []
+    if current_price and current_price > 0:
+        values.append(int(current_price))
+    for value in [base_price, base_price + 30, base_price + 80, base_price * 2]:
+        if value > 0 and value not in values:
+            values.append(int(value))
+    return values[:4]
+
+
 def _format_traffic(limit_gb: int | None) -> str:
     if not limit_gb or limit_gb <= 0:
         return "безлимит"

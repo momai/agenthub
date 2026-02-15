@@ -6,6 +6,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from app.bot.keyboards import (
+    amount_presets_keyboard,
     back_to_menu_keyboard,
     cancel_keyboard,
     clients_list_pagination_keyboard,
@@ -13,7 +14,6 @@ from app.bot.keyboards import (
     new_client_confirm_keyboard,
     new_client_days_keyboard,
     skip_keyboard,
-    tariff_actions_keyboard,
     tariffs_keyboard,
 )
 from app.bot.states import NewClientState, RenewState
@@ -33,6 +33,7 @@ from app.services.debt_service import increase_debt
 from app.services.remnawave_service import create_user_only, username_exists
 
 from .common import (
+    _amount_presets,
     _agent_display,
     USERNAME_PATTERN,
     _calc_amount_by_days,
@@ -346,6 +347,8 @@ async def tariff_pick(call: CallbackQuery, state: FSMContext) -> None:
                 await call.answer()
                 return
         await state.set_state(NewClientState.waiting_price)
+        presets = _amount_presets(base_price)
+        price_prompt = f"{_t(settings.text_new_client_price_prompt)}\n\n{_t(settings.text_amount_choose_hint)}"
         await _edit_or_send(
             call,
             _t(
@@ -354,9 +357,9 @@ async def tariff_pick(call: CallbackQuery, state: FSMContext) -> None:
                 price=base_price,
                 traffic=traffic,
                 desc=desc_line,
-                prompt=_t(settings.text_new_client_price_prompt),
+                prompt=price_prompt,
             ),
-            reply_markup=tariff_actions_keyboard(),
+            reply_markup=amount_presets_keyboard("amount:new", presets),
             is_menu=True,
         )
         await call.answer()
@@ -417,7 +420,9 @@ async def tariff_pick(call: CallbackQuery, state: FSMContext) -> None:
             client_price=client_price,
             prompt=f"{upgrade_note}{amount_prompt}",
         )
-        await state.update_data(renew_amount_prompt=prompt_text)
+        prompt_with_hint = f"{prompt_text}\n\n{_t(settings.text_amount_choose_hint)}"
+        await state.update_data(renew_amount_prompt=prompt_with_hint)
+        presets = _amount_presets(base_price, old_monthly_value)
         await _edit_or_send(
             call,
             _t(
@@ -427,9 +432,9 @@ async def tariff_pick(call: CallbackQuery, state: FSMContext) -> None:
                 traffic=traffic,
                 desc=desc_line,
                 profit=profit_label,
-                prompt=prompt_text,
+                prompt=prompt_with_hint,
             ),
-            reply_markup=tariff_actions_keyboard(),
+            reply_markup=amount_presets_keyboard("amount:renew", presets),
             is_menu=True,
         )
         await call.answer()
@@ -455,25 +460,29 @@ async def new_client_price(message: Message, state: FSMContext) -> None:
     try:
         price = int((message.text or "").strip())
     except ValueError:
+        data = await state.get_data()
+        base_price = data.get("tariff_base_price") or get_settings().base_subscription_price
         await _render_error_prompt(
             bot=message.bot,
             chat_id=message.chat.id,
             user_id=message.from_user.id,
             name=message.from_user.full_name,
             error_text=_t(get_settings().text_amount_invalid_example),
-            prompt_text=_t(get_settings().text_new_client_price_prompt),
-            reply_markup=cancel_keyboard(),
+            prompt_text=f"{_t(get_settings().text_new_client_price_prompt)}\n\n{_t(get_settings().text_amount_choose_hint)}",
+            reply_markup=amount_presets_keyboard("amount:new", _amount_presets(base_price)),
         )
         return
     if price <= 0:
+        data = await state.get_data()
+        base_price = data.get("tariff_base_price") or get_settings().base_subscription_price
         await _render_error_prompt(
             bot=message.bot,
             chat_id=message.chat.id,
             user_id=message.from_user.id,
             name=message.from_user.full_name,
             error_text=_t(get_settings().text_amount_positive),
-            prompt_text=_t(get_settings().text_new_client_price_prompt),
-            reply_markup=cancel_keyboard(),
+            prompt_text=f"{_t(get_settings().text_new_client_price_prompt)}\n\n{_t(get_settings().text_amount_choose_hint)}",
+            reply_markup=amount_presets_keyboard("amount:new", _amount_presets(base_price)),
         )
         return
 
@@ -513,6 +522,51 @@ async def new_client_price(message: Message, state: FSMContext) -> None:
     return
 
 
+@router.callback_query(lambda call: call.data.startswith("amount:new:"))
+async def new_client_amount_preset(call: CallbackQuery, state: FSMContext) -> None:
+    if not await _is_agent_allowed(call.from_user.id):
+        await call.answer(_t(get_settings().text_no_access_alert), show_alert=True)
+        return
+    settings = get_settings()
+    token = call.data.split(":")[-1]
+    try:
+        price = int(token)
+    except ValueError:
+        await call.answer(_t(settings.text_amount_invalid), show_alert=True)
+        return
+    if price <= 0:
+        await call.answer(_t(settings.text_amount_positive), show_alert=True)
+        return
+
+    data = await state.get_data()
+    username = data.get("username")
+    days = data.get("days") or settings.default_renew_days
+    base_price = data.get("tariff_base_price") or settings.base_subscription_price
+    tariff_name = data.get("tariff_name")
+    amount_total = _calc_amount_by_days(settings, price, days)
+    owner_share = _calc_base_debt(settings, days, base_price)
+    profit = amount_total - owner_share
+    await state.update_data(new_client_amount_monthly=price)
+    await state.set_state(NewClientState.waiting_confirm)
+    await _edit_or_send(
+        call,
+        _t(
+            settings.text_new_client_confirm,
+            username=username,
+            tariff=tariff_name or _t(settings.text_client_tariff_default),
+            base_price=base_price,
+            days=days,
+            amount_monthly=price,
+            amount_total=amount_total,
+            owner_share=owner_share,
+            profit=profit,
+        ),
+        reply_markup=new_client_confirm_keyboard(),
+        is_menu=True,
+    )
+    await call.answer()
+
+
 @router.callback_query(lambda call: call.data == "client:new:confirm")
 async def new_client_confirm(call: CallbackQuery, state: FSMContext) -> None:
     if not await _is_agent_allowed(call.from_user.id):
@@ -526,6 +580,7 @@ async def new_client_confirm(call: CallbackQuery, state: FSMContext) -> None:
     await _create_client_in_remnawave(
         actor_id=call.from_user.id,
         actor_name=call.from_user.full_name,
+        actor_username=call.from_user.username,
         message=call.message,
         username=data.get("username"),
         telegram_id=data.get("telegram_id"),
@@ -545,11 +600,13 @@ async def new_client_confirm_back(call: CallbackQuery, state: FSMContext) -> Non
         await call.answer(_t(get_settings().text_no_access_alert), show_alert=True)
         return
     settings = get_settings()
+    data = await state.get_data()
+    base_price = data.get("tariff_base_price") or settings.base_subscription_price
     await state.set_state(NewClientState.waiting_price)
     await _edit_or_send(
         call,
-        _t(settings.text_new_client_price_prompt),
-        reply_markup=cancel_keyboard(),
+        f"{_t(settings.text_new_client_price_prompt)}\n\n{_t(settings.text_amount_choose_hint)}",
+        reply_markup=amount_presets_keyboard("amount:new", _amount_presets(base_price)),
         is_menu=True,
     )
     await call.answer()
@@ -582,6 +639,7 @@ async def clients_list_page(call: CallbackQuery) -> None:
 async def _create_client_in_remnawave(
     actor_id: int,
     actor_name: str,
+    actor_username: str | None,
     message: Message,
     username: str,
     telegram_id: int | None,
@@ -592,7 +650,7 @@ async def _create_client_in_remnawave(
     tariff_remnawave: dict | None = None,
 ) -> None:
     async with SessionLocal() as session:
-        agent = await get_or_create_agent(session, actor_id, actor_name, message.from_user.username)
+        agent = await get_or_create_agent(session, actor_id, actor_name, actor_username)
         if not agent.is_active:
             await _show_status_then_menu(
                 bot=message.bot,

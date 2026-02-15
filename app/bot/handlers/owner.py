@@ -462,6 +462,55 @@ async def owner_sync(call: CallbackQuery) -> None:
     await call.answer()
 
 
+@router.callback_query(lambda call: call.data == "owner:refresh_agents")
+async def owner_refresh_agents(call: CallbackQuery) -> None:
+    settings = get_settings()
+    if not _is_owner_or_admin(call.from_user.id):
+        await call.answer(_t(settings.text_no_access_alert), show_alert=True)
+        return
+
+    await _edit_or_send(call, _t(settings.text_owner_refresh_agents_start), is_menu=True)
+    async with SessionLocal() as session:
+        agents_with_counts = await list_agents(session)
+        total = len(agents_with_counts)
+        updated = 0
+        for agent, _ in agents_with_counts:
+            try:
+                chat = await call.bot.get_chat(agent.telegram_id)
+            except Exception:
+                continue
+
+            username = (getattr(chat, "username", None) or "").lstrip("@").strip().lower() or None
+            full_name = (getattr(chat, "full_name", None) or "").strip()
+            if not full_name:
+                first_name = (getattr(chat, "first_name", None) or "").strip()
+                last_name = (getattr(chat, "last_name", None) or "").strip()
+                full_name = f"{first_name} {last_name}".strip() if first_name or last_name else ""
+            if not full_name:
+                full_name = (getattr(chat, "title", None) or "").strip()
+
+            changed = False
+            if username and agent.telegram_username != username:
+                agent.telegram_username = username
+                changed = True
+            if full_name and agent.name != full_name:
+                agent.name = full_name
+                changed = True
+            if changed:
+                updated += 1
+
+        if updated:
+            await session.commit()
+
+    await _edit_or_send(
+        call,
+        _t(settings.text_owner_refresh_agents_done, updated=updated, total=total),
+        reply_markup=owner_agents_menu(),
+        is_menu=True,
+    )
+    await call.answer()
+
+
 @router.callback_query(lambda call: call.data == "owner:report")
 async def owner_report(call: CallbackQuery) -> None:
     settings = get_settings()
